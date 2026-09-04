@@ -10,7 +10,10 @@ import {
   ChevronDown, 
   ChevronUp, 
   Sparkles,
-  AlertCircle
+  AlertCircle,
+  Lock,
+  Unlock,
+  X
 } from 'lucide-react';
 
 /**
@@ -69,6 +72,17 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [countdown, setCountdown] = useState(5);
   const [lastUpdated, setLastUpdated] = useState(null);
+
+  // PIN Protection State
+  const [isPinModalOpen, setIsPinModalOpen] = useState(false);
+  const [pinInput, setPinInput] = useState('');
+  const [activePin, setActivePin] = useState('');
+  const [pinErrorMessage, setPinErrorMessage] = useState('');
+  const [isSubmittingPin, setIsSubmittingPin] = useState(false);
+  const [pendingEmail, setPendingEmail] = useState('');
+  const [isMailboxLocked, setIsMailboxLocked] = useState(false);
+  const pinInputRef = useRef(null);
+
   const [recentEmails, setRecentEmails] = useState(() => {
     try {
       const saved = localStorage.getItem('BA_STORE_RECENT_OTP_EMAILS');
@@ -79,6 +93,16 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
   });
 
   const timerRef = useRef(null);
+
+  // Auto-focus PIN input when modal opens
+  useEffect(() => {
+    if (isPinModalOpen) {
+      const timer = setTimeout(() => {
+        pinInputRef.current?.focus();
+      }, 150);
+      return () => clearTimeout(timer);
+    }
+  }, [isPinModalOpen]);
 
   // Save recent search email
   const saveRecentEmail = (email) => {
@@ -107,8 +131,10 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
   // Fetch Mails: Multi-Tier Resilient Fetch Strategy
   // Tier 1: Direct Client Browser Call to Maily Space REST API (bypasses datacenter Cloudflare WAF)
   // Tier 2: Direct Client Browser Call to Maily Space Public Mailbox API (the exact API used by maily.space web)
-  const fetchMails = async (targetEmail, isSilent = false) => {
+  const fetchMails = async (targetEmail, isSilent = false, pin = activePin) => {
     const clean = (targetEmail || emailInput).trim().toLowerCase();
+    const pinToUse = pin !== undefined ? pin : activePin;
+
     if (!clean || !clean.includes('@')) {
       if (!isSilent) {
         setErrorMessage('กรุณาระบุที่อยู่อีเมลที่ถูกต้อง (เช่น example@baxsv.store)');
@@ -128,22 +154,55 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
     // Maily Space sends Access-Control-Allow-Origin: * so browsers can call it directly.
     // Client browser has real residential IP, avoiding Cloudflare 403 blocks against AWS/Vercel servers.
     try {
+      const tier1Headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json, text/plain, */*'
+      };
+      if (pinToUse) {
+        tier1Headers['X-Mailbox-Pin'] = pinToUse;
+      }
+
+      const tier1Body = {
+        apiKey: 'sk_v1_phbofy2tb4gvtmsq4g7nw1ywmmwv6c9p',
+        email: clean,
+        size: 40,
+        page: 1
+      };
+      if (pinToUse) {
+        tier1Body.pin = pinToUse;
+      }
+
       const directRes = await fetch('https://api.maily.space/v1/mails', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json, text/plain, */*'
-        },
-        body: JSON.stringify({
-          apiKey: 'sk_v1_phbofy2tb4gvtmsq4g7nw1ywmmwv6c9p',
-          email: clean,
-          size: 40,
-          page: 1
-        })
+        headers: tier1Headers,
+        body: JSON.stringify(tier1Body)
       });
 
-      if (directRes.ok) {
-        const directData = await directRes.json();
+      const directData = await directRes.json().catch(() => null);
+
+      // Detect PIN Lock Challenge from Maily Space
+      if (
+        directRes.status === 403 ||
+        directData?.statusCode === 403 ||
+        directData?.message === 'กรุณาใส่ PIN' ||
+        directData?.message === 'PIN ไม่ถูกต้อง'
+      ) {
+        setIsLoading(false);
+        setIsSubmittingPin(false);
+        setPendingEmail(clean);
+        setIsMailboxLocked(true);
+        setIsPinModalOpen(true);
+        if (directData?.message === 'PIN ไม่ถูกต้อง' || (pinToUse && directRes.status === 403)) {
+          setPinErrorMessage('รหัส PIN ไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง');
+        } else {
+          setPinErrorMessage('');
+          setPinInput('');
+          setWarningMessage('กล่องข้อความนี้ถูกล็อคด้วย PIN กรุณาใส่รหัสเพื่อดูข้อความ');
+        }
+        return;
+      }
+
+      if (directRes.ok && directData) {
         const list = Array.isArray(directData?.data?.mails)
           ? directData.data.mails
           : (Array.isArray(directData?.mails) ? directData.mails : []);
@@ -164,9 +223,36 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
         if (accountName && domainPart) {
           const domainId = domainPart.replace(/\./g, '');
           const pubUrl = `https://api.maily.space/mail/public/mails?accountName=${encodeURIComponent(accountName)}&domainId=${encodeURIComponent(domainId)}&size=40`;
-          const pubRes = await fetch(pubUrl);
-          if (pubRes.ok) {
-            const pubData = await pubRes.json();
+          const pubHeaders = {};
+          if (pinToUse) {
+            pubHeaders['X-Mailbox-Pin'] = pinToUse;
+          }
+          const pubRes = await fetch(pubUrl, { headers: pubHeaders });
+          const pubData = await pubRes.json().catch(() => null);
+
+          // Detect PIN Lock Challenge in Tier 2
+          if (
+            pubRes.status === 403 ||
+            pubData?.statusCode === 403 ||
+            pubData?.message === 'กรุณาใส่ PIN' ||
+            pubData?.message === 'PIN ไม่ถูกต้อง'
+          ) {
+            setIsLoading(false);
+            setIsSubmittingPin(false);
+            setPendingEmail(clean);
+            setIsMailboxLocked(true);
+            setIsPinModalOpen(true);
+            if (pubData?.message === 'PIN ไม่ถูกต้อง' || (pinToUse && pubRes.status === 403)) {
+              setPinErrorMessage('รหัส PIN ไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง');
+            } else {
+              setPinErrorMessage('');
+              setPinInput('');
+              setWarningMessage('กล่องข้อความนี้ถูกล็อคด้วย PIN กรุณาใส่รหัสเพื่อดูข้อความ');
+            }
+            return;
+          }
+
+          if (pubRes.ok && pubData) {
             const list = Array.isArray(pubData?.data?.mails)
               ? pubData.data.mails
               : (Array.isArray(pubData?.mails) ? pubData.mails : (Array.isArray(pubData) ? pubData : []));
@@ -187,6 +273,16 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
         console.warn('Tier 2 public mailbox fetch error:', pubErr);
       }
     }
+
+    // If fetch succeeded (either with valid PIN or unpinned email)
+    if (pinToUse) {
+      setActivePin(pinToUse);
+      setIsMailboxLocked(false);
+      setIsPinModalOpen(false);
+      setPinErrorMessage('');
+      setPinInput('');
+    }
+    setIsSubmittingPin(false);
 
     if (fetchedMails && fetchedMails.length > 0) {
       setMails(fetchedMails);
@@ -214,14 +310,31 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
   // Trigger search on form submit
   const handleSearchSubmit = (e) => {
     if (e) e.preventDefault();
-    fetchMails(emailInput);
+    setActivePin('');
+    setIsMailboxLocked(false);
+    fetchMails(emailInput, false, '');
+  };
+
+  // Handle PIN Unlock Submit
+  const handlePinSubmit = (e) => {
+    if (e) e.preventDefault();
+    const sanitized = pinInput.replace(/\D/g, '').slice(0, 8);
+    if (!sanitized || sanitized.length < 4) {
+      setPinErrorMessage('กรุณากรอกรหัส PIN ให้ครบถ้วน (ตัวเลข 4-6 หลัก)');
+      return;
+    }
+    setPinErrorMessage('');
+    setIsSubmittingPin(true);
+    fetchMails(pendingEmail || activeEmail || emailInput, false, sanitized);
   };
 
   // If initialEmail changes, auto-search
   useEffect(() => {
     if (initialEmail && initialEmail.trim()) {
       setEmailInput(initialEmail.trim());
-      fetchMails(initialEmail.trim());
+      setActivePin('');
+      setIsMailboxLocked(false);
+      fetchMails(initialEmail.trim(), false, '');
     }
   }, [initialEmail]);
 
@@ -235,7 +348,7 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
     timerRef.current = setInterval(() => {
       setCountdown((prev) => {
         if (prev <= 1) {
-          fetchMails(activeEmail, true);
+          fetchMails(activeEmail, true, activePin);
           return 5;
         }
         return prev - 1;
@@ -245,7 +358,7 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [autoRefresh, activeEmail]);
+  }, [autoRefresh, activeEmail, activePin]);
 
   // Copy OTP handler
   const handleCopyOtp = (id, otp) => {
@@ -402,13 +515,31 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
                 📫
               </div>
               <div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <span className="font-bold text-gray-800 text-sm sm:text-base">
                     กล่องจดหมายของ:
                   </span>
                   <span className="font-mono text-rose-600 font-bold text-xs sm:text-sm bg-rose-50 px-2.5 py-1 rounded-xl border border-rose-200">
                     {activeEmail}
                   </span>
+                  {activePin ? (
+                    <span className="inline-flex items-center gap-1 text-[11px] bg-emerald-50 text-emerald-700 font-bold px-2.5 py-0.5 rounded-full border border-emerald-200 shadow-2xs">
+                      <Unlock className="w-3 h-3 text-emerald-600" />
+                      <span>ปลดล็อคด้วย PIN แล้ว</span>
+                    </span>
+                  ) : isMailboxLocked ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPendingEmail(activeEmail);
+                        setIsPinModalOpen(true);
+                      }}
+                      className="inline-flex items-center gap-1 text-[11px] bg-rose-50 text-rose-600 hover:bg-rose-100 font-bold px-2.5 py-0.5 rounded-full border border-rose-200 shadow-2xs cursor-pointer transition-all"
+                    >
+                      <Lock className="w-3 h-3 text-rose-500" />
+                      <span>ล็อคด้วย PIN (คลิกเพื่อปลดล็อค)</span>
+                    </button>
+                  ) : null}
                 </div>
                 <div className="text-[11px] text-gray-500 mt-0.5">
                   พบทั้งหมด <strong className="text-gray-800">{mails.length}</strong> ข้อความ
@@ -434,7 +565,7 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
               </button>
 
               <button
-                onClick={() => fetchMails(activeEmail)}
+                onClick={() => fetchMails(activeEmail, false, activePin)}
                 disabled={isLoading}
                 className="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 text-xs font-bold transition-all flex items-center gap-1 cursor-pointer disabled:opacity-50"
               >
@@ -446,30 +577,61 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
 
           {/* Mail List */}
           {mails.length === 0 ? (
-            <div className="bg-white rounded-3xl p-10 sm:p-14 text-center border border-pink-100 shadow-2xs space-y-4">
-              <div className="w-16 h-16 rounded-full bg-pink-50 text-pink-400 flex items-center justify-center text-3xl mx-auto animate-pulse">
-                📭
-              </div>
-              <div>
-                <h3 className="text-base sm:text-lg font-bold text-gray-800">
-                  ยังไม่มีข้อความเข้าสำหรับอีเมลนี้
-                </h3>
-                <p className="text-xs sm:text-sm text-gray-500 mt-1 max-w-md mx-auto">
-                  หากคุณเพิ่งกดยืนยันหรือขอรหัส OTP จากแอพ ข้อความอาจใช้เวลาเดินทางประมาณ 10-30 วินาที กรุณากดปุ่ม <strong>"รีเฟรช"</strong> หรือเปิด <strong>"เช็คอัตโนมัติ"</strong> ไว้
-                </p>
-              </div>
+            isMailboxLocked ? (
+              <div className="bg-white rounded-3xl p-8 sm:p-12 text-center border border-pink-100 shadow-2xs space-y-4">
+                <div className="w-16 h-16 rounded-3xl bg-rose-50 text-rose-500 border border-rose-200 flex items-center justify-center text-3xl mx-auto shadow-xs">
+                  <Lock className="w-8 h-8 text-rose-500" />
+                </div>
+                <div className="space-y-1.5 max-w-md mx-auto">
+                  <h3 className="text-base sm:text-lg font-bold text-gray-800 font-['Prompt']">
+                    กล่องจดหมายนี้ถูกล็อคด้วยรหัส PIN
+                  </h3>
+                  <p className="text-xs sm:text-sm text-gray-500">
+                    อีเมล <span className="font-mono font-bold text-rose-600">{activeEmail || pendingEmail}</span> มีการตั้งรหัสผ่านป้องกันไว้ กรุณากรอกรหัส PIN (ตัวเลข 4-6 หลัก) เพื่อเข้าถึงข้อความและดูรหัส OTP
+                  </p>
+                </div>
 
-              <div className="pt-2 flex items-center justify-center gap-2">
-                <button
-                  onClick={() => fetchMails(activeEmail)}
-                  disabled={isLoading}
-                  className="px-5 py-2.5 rounded-2xl bg-rose-500 text-white text-xs font-bold shadow-xs hover:bg-rose-600 transition-all flex items-center gap-1.5 cursor-pointer"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-                  <span>ตรวจหาข้อความใหม่อีกครั้ง</span>
-                </button>
+                <div className="pt-2 flex items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPendingEmail(activeEmail);
+                      setPinErrorMessage('');
+                      setIsPinModalOpen(true);
+                    }}
+                    className="px-6 py-2.5 rounded-2xl bg-gradient-to-r from-rose-500 via-pink-600 to-purple-600 hover:opacity-95 active:scale-98 text-white text-xs sm:text-sm font-bold shadow-md shadow-pink-500/20 transition-all flex items-center gap-2 cursor-pointer"
+                  >
+                    <Unlock className="w-4 h-4" />
+                    <span>กรอกรหัส PIN เพื่อปลดล็อค</span>
+                  </button>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="bg-white rounded-3xl p-10 sm:p-14 text-center border border-pink-100 shadow-2xs space-y-4">
+                <div className="w-16 h-16 rounded-full bg-pink-50 text-pink-400 flex items-center justify-center text-3xl mx-auto animate-pulse">
+                  📭
+                </div>
+                <div>
+                  <h3 className="text-base sm:text-lg font-bold text-gray-800">
+                    ยังไม่มีข้อความเข้าสำหรับอีเมลนี้
+                  </h3>
+                  <p className="text-xs sm:text-sm text-gray-500 mt-1 max-w-md mx-auto">
+                    หากคุณเพิ่งกดยืนยันหรือขอรหัส OTP จากแอพ ข้อความอาจใช้เวลาเดินทางประมาณ 10-30 วินาที กรุณากดปุ่ม <strong>"รีเฟรช"</strong> หรือเปิด <strong>"เช็คอัตโนมัติ"</strong> ไว้
+                  </p>
+                </div>
+
+                <div className="pt-2 flex items-center justify-center gap-2">
+                  <button
+                    onClick={() => fetchMails(activeEmail, false, activePin)}
+                    disabled={isLoading}
+                    className="px-5 py-2.5 rounded-2xl bg-rose-500 text-white text-xs font-bold shadow-xs hover:bg-rose-600 transition-all flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+                    <span>ตรวจหาข้อความใหม่อีกครั้ง</span>
+                  </button>
+                </div>
+              </div>
+            )
           ) : (
             <div className="space-y-4">
               {mails.map((mail, index) => {
@@ -641,6 +803,124 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
           <li>หากมีปัญหาในการรับรหัส สามารถติดต่อแอดมินผ่าน LINE ร้านค้าได้ตลอดเวลาทำการครับ</li>
         </ul>
       </div>
+
+      {/* PIN Unlock Modal */}
+      {isPinModalOpen && (
+        <div 
+          className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-200"
+          onClick={() => {
+            setIsPinModalOpen(false);
+            setIsSubmittingPin(false);
+          }}
+        >
+          <div 
+            className="bg-white rounded-3xl p-6 sm:p-8 max-w-md w-full border border-pink-100 shadow-2xl space-y-6 relative overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Decorative gradient corner */}
+            <div className="absolute -top-12 -right-12 w-28 h-28 bg-pink-200/50 rounded-full blur-xl pointer-events-none" />
+            <div className="absolute -bottom-12 -left-12 w-28 h-28 bg-rose-200/40 rounded-full blur-xl pointer-events-none" />
+
+            {/* Close button */}
+            <button
+              type="button"
+              onClick={() => {
+                setIsPinModalOpen(false);
+                setIsSubmittingPin(false);
+              }}
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 p-2 rounded-full hover:bg-gray-100 transition-colors cursor-pointer"
+              title="ปิด"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            {/* Modal Header */}
+            <div className="text-center space-y-2 pt-2">
+              <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-pink-500 to-rose-500 text-white flex items-center justify-center mx-auto shadow-md shadow-pink-500/20">
+                <Lock className="w-7 h-7" />
+              </div>
+              <h3 className="text-xl font-bold text-gray-900 font-['Prompt']">
+                ใส่รหัส PIN กล่องข้อความ
+              </h3>
+              <p className="text-xs text-gray-500 max-w-xs mx-auto">
+                กล่องจดหมายนี้มีการตั้งรหัส PIN ป้องกันไว้ กรุณากรอกรหัส PIN เพื่อเปิดดูข้อความ
+              </p>
+              <div className="pt-1">
+                <span className="inline-block font-mono text-xs font-semibold text-rose-600 bg-pink-50 px-3 py-1 rounded-full border border-pink-100">
+                  {pendingEmail || activeEmail || emailInput}
+                </span>
+              </div>
+            </div>
+
+            {/* PIN Input Form */}
+            <form onSubmit={handlePinSubmit} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-gray-700 text-center">
+                  รหัส PIN (ตัวเลข 4-6 หลัก)
+                </label>
+                <div className="relative max-w-[240px] mx-auto">
+                  <input
+                    ref={pinInputRef}
+                    type="password"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    maxLength={8}
+                    autoComplete="one-time-code"
+                    value={pinInput}
+                    onChange={(e) => {
+                      const val = e.target.value.replace(/\D/g, '').slice(0, 8);
+                      setPinInput(val);
+                      if (pinErrorMessage) setPinErrorMessage('');
+                    }}
+                    placeholder="••••••"
+                    className="w-full text-center tracking-[0.4em] font-mono text-2xl font-bold py-3 px-4 rounded-2xl border-2 border-pink-200 focus:border-pink-500 focus:ring-4 focus:ring-pink-100 outline-none bg-pink-50/20 text-gray-800 transition-all placeholder:tracking-normal placeholder:font-normal placeholder:text-gray-300"
+                  />
+                </div>
+              </div>
+
+              {/* Error message inside modal */}
+              {pinErrorMessage && (
+                <div className="bg-rose-50 border border-rose-200 text-rose-600 text-xs rounded-xl p-3 flex items-center justify-center gap-2 animate-in fade-in">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-500" />
+                  <span>{pinErrorMessage}</span>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex items-center gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsPinModalOpen(false);
+                    setIsSubmittingPin(false);
+                  }}
+                  className="w-1/3 py-3 rounded-xl border border-gray-200 hover:bg-gray-50 text-gray-600 text-xs sm:text-sm font-semibold transition-all cursor-pointer"
+                >
+                  ยกเลิก
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={isSubmittingPin || !pinInput}
+                  className="flex-1 py-3 rounded-xl bg-gradient-to-r from-rose-500 via-pink-600 to-purple-600 hover:opacity-95 active:scale-98 text-white text-xs sm:text-sm font-bold shadow-md shadow-pink-500/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
+                >
+                  {isSubmittingPin ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>กำลังตรวจสอบ...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Unlock className="w-4 h-4" />
+                      <span>ยืนยัน / ปลดล็อค</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
     </div>
   );
