@@ -150,127 +150,129 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
 
     let fetchedMails = null;
 
-    // Tier 1: Direct Browser API Call to Maily Space REST API
-    // Maily Space sends Access-Control-Allow-Origin: * so browsers can call it directly.
-    // Client browser has real residential IP, avoiding Cloudflare 403 blocks against AWS/Vercel servers.
+    // Tier 1: Direct Browser Call to Maily Space Public Mailbox API
+    // Exact endpoint used by maily.space web application.
+    // Properly enforces PIN locks (returns HTTP 403 'กรุณาใส่ PIN') and bypasses datacenter IP blocks.
     try {
-      const tier1Headers = {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json, text/plain, */*'
-      };
-      if (pinToUse) {
-        tier1Headers['X-Mailbox-Pin'] = pinToUse;
-      }
-
-      const tier1Body = {
-        apiKey: 'sk_v1_phbofy2tb4gvtmsq4g7nw1ywmmwv6c9p',
-        email: clean,
-        size: 40,
-        page: 1
-      };
-      if (pinToUse) {
-        tier1Body.pin = pinToUse;
-      }
-
-      const directRes = await fetch('https://api.maily.space/v1/mails', {
-        method: 'POST',
-        headers: tier1Headers,
-        body: JSON.stringify(tier1Body)
-      });
-
-      const directData = await directRes.json().catch(() => null);
-
-      // Detect PIN Lock Challenge from Maily Space
-      if (
-        directRes.status === 403 ||
-        directData?.statusCode === 403 ||
-        directData?.message === 'กรุณาใส่ PIN' ||
-        directData?.message === 'PIN ไม่ถูกต้อง'
-      ) {
-        setIsLoading(false);
-        setIsSubmittingPin(false);
-        setPendingEmail(clean);
-        setIsMailboxLocked(true);
-        setIsPinModalOpen(true);
-        if (directData?.message === 'PIN ไม่ถูกต้อง' || (pinToUse && directRes.status === 403)) {
-          setPinErrorMessage('รหัส PIN ไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง');
-        } else {
-          setPinErrorMessage('');
-          setPinInput('');
-          setWarningMessage('กล่องข้อความนี้ถูกล็อคด้วย PIN กรุณาใส่รหัสเพื่อดูข้อความ');
+      const [accountName, domainPart] = clean.split('@');
+      if (accountName && domainPart) {
+        const domainId = domainPart.replace(/\./g, '');
+        const pubUrl = `https://api.maily.space/mail/public/mails?accountName=${encodeURIComponent(accountName)}&domainId=${encodeURIComponent(domainId)}&size=40`;
+        const pubHeaders = {};
+        if (pinToUse) {
+          pubHeaders['X-Mailbox-Pin'] = pinToUse;
         }
-        return;
-      }
 
-      if (directRes.ok && directData) {
-        const list = Array.isArray(directData?.data?.mails)
-          ? directData.data.mails
-          : (Array.isArray(directData?.mails) ? directData.mails : []);
-        if (list.length > 0) {
-          fetchedMails = list;
-        } else if (directData?.statusCode === 200 || directRes.status === 200 || directRes.status === 201) {
-          fetchedMails = [];
+        const pubRes = await fetch(pubUrl, { headers: pubHeaders });
+        const pubData = await pubRes.json().catch(() => null);
+
+        // Detect PIN Lock Challenge from Maily Space
+        if (
+          pubRes.status === 403 ||
+          pubData?.statusCode === 403 ||
+          pubData?.message === 'กรุณาใส่ PIN' ||
+          pubData?.message === 'PIN ไม่ถูกต้อง'
+        ) {
+          setIsLoading(false);
+          setIsSubmittingPin(false);
+          setPendingEmail(clean);
+          setIsMailboxLocked(true);
+          setIsPinModalOpen(true);
+          if (pubData?.message === 'PIN ไม่ถูกต้อง' || (pinToUse && pubRes.status === 403)) {
+            setPinErrorMessage('รหัส PIN ไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง');
+          } else {
+            setPinErrorMessage('');
+            setPinInput('');
+            setWarningMessage('กล่องข้อความนี้ถูกล็อคด้วย PIN กรุณาใส่รหัสเพื่อดูข้อความ');
+          }
+          return; // STOP! Never bypass PIN lock
+        }
+
+        if (pubRes.ok && pubData) {
+          const list = Array.isArray(pubData?.data?.mails)
+            ? pubData.data.mails
+            : (Array.isArray(pubData?.mails) ? pubData.mails : (Array.isArray(pubData) ? pubData : []));
+          if (list.length > 0) {
+            fetchedMails = list.map((m) => ({
+              id: m.id || `mail-${Math.random().toString(36).substr(2, 9)}`,
+              from: m.from || m.sender || 'ไม่ระบุผู้ส่ง',
+              to: clean,
+              subject: m.subject || '(ไม่มีหัวข้อ)',
+              html: m.html || '',
+              text: m.text || m.body || m.searchText || m.snippet || '',
+              createdAt: m.createdAt || m.date || new Date().toISOString()
+            }));
+          } else if (pubRes.status === 200) {
+            fetchedMails = [];
+          }
         }
       }
-    } catch (directErr) {
-      console.warn('Tier 1 direct fetch error:', directErr);
+    } catch (pubErr) {
+      console.warn('Tier 1 public mailbox fetch error:', pubErr);
     }
 
-    // Tier 2: Direct Browser Call to Public Mailbox API (exact same endpoint maily.space web uses)
+    // Tier 2: Developer REST API (Fallback only if Tier 1 was not a 403 PIN challenge)
     if (!fetchedMails || fetchedMails.length === 0) {
       try {
-        const [accountName, domainPart] = clean.split('@');
-        if (accountName && domainPart) {
-          const domainId = domainPart.replace(/\./g, '');
-          const pubUrl = `https://api.maily.space/mail/public/mails?accountName=${encodeURIComponent(accountName)}&domainId=${encodeURIComponent(domainId)}&size=40`;
-          const pubHeaders = {};
-          if (pinToUse) {
-            pubHeaders['X-Mailbox-Pin'] = pinToUse;
-          }
-          const pubRes = await fetch(pubUrl, { headers: pubHeaders });
-          const pubData = await pubRes.json().catch(() => null);
+        const tier2Headers = {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json, text/plain, */*'
+        };
+        if (pinToUse) {
+          tier2Headers['X-Mailbox-Pin'] = pinToUse;
+        }
 
-          // Detect PIN Lock Challenge in Tier 2
-          if (
-            pubRes.status === 403 ||
-            pubData?.statusCode === 403 ||
-            pubData?.message === 'กรุณาใส่ PIN' ||
-            pubData?.message === 'PIN ไม่ถูกต้อง'
-          ) {
-            setIsLoading(false);
-            setIsSubmittingPin(false);
-            setPendingEmail(clean);
-            setIsMailboxLocked(true);
-            setIsPinModalOpen(true);
-            if (pubData?.message === 'PIN ไม่ถูกต้อง' || (pinToUse && pubRes.status === 403)) {
-              setPinErrorMessage('รหัส PIN ไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง');
-            } else {
-              setPinErrorMessage('');
-              setPinInput('');
-              setWarningMessage('กล่องข้อความนี้ถูกล็อคด้วย PIN กรุณาใส่รหัสเพื่อดูข้อความ');
-            }
-            return;
-          }
+        const tier2Body = {
+          apiKey: 'sk_v1_phbofy2tb4gvtmsq4g7nw1ywmmwv6c9p',
+          email: clean,
+          size: 40,
+          page: 1
+        };
+        if (pinToUse) {
+          tier2Body.pin = pinToUse;
+        }
 
-          if (pubRes.ok && pubData) {
-            const list = Array.isArray(pubData?.data?.mails)
-              ? pubData.data.mails
-              : (Array.isArray(pubData?.mails) ? pubData.mails : (Array.isArray(pubData) ? pubData : []));
-            if (list.length > 0) {
-              fetchedMails = list.map((m) => ({
-                id: m.id || `mail-${Math.random().toString(36).substr(2, 9)}`,
-                from: m.from || m.sender || 'ไม่ระบุผู้ส่ง',
-                to: clean,
-                subject: m.subject || '(ไม่มีหัวข้อ)',
-                html: m.html || '',
-                text: m.text || m.body || m.searchText || m.snippet || '',
-                createdAt: m.createdAt || m.date || new Date().toISOString()
-              }));
-            }
+        const directRes = await fetch('https://api.maily.space/v1/mails', {
+          method: 'POST',
+          headers: tier2Headers,
+          body: JSON.stringify(tier2Body)
+        });
+
+        const directData = await directRes.json().catch(() => null);
+
+        if (
+          directRes.status === 403 ||
+          directData?.statusCode === 403 ||
+          directData?.message === 'กรุณาใส่ PIN' ||
+          directData?.message === 'PIN ไม่ถูกต้อง'
+        ) {
+          setIsLoading(false);
+          setIsSubmittingPin(false);
+          setPendingEmail(clean);
+          setIsMailboxLocked(true);
+          setIsPinModalOpen(true);
+          if (directData?.message === 'PIN ไม่ถูกต้อง' || (pinToUse && directRes.status === 403)) {
+            setPinErrorMessage('รหัส PIN ไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง');
+          } else {
+            setPinErrorMessage('');
+            setPinInput('');
+            setWarningMessage('กล่องข้อความนี้ถูกล็อคด้วย PIN กรุณาใส่รหัสเพื่อดูข้อความ');
+          }
+          return;
+        }
+
+        if (directRes.ok && directData) {
+          const list = Array.isArray(directData?.data?.mails)
+            ? directData.data.mails
+            : (Array.isArray(directData?.mails) ? directData.mails : []);
+          if (list.length > 0) {
+            fetchedMails = list;
+          } else if (directData?.statusCode === 200 || directRes.status === 200 || directRes.status === 201) {
+            fetchedMails = [];
           }
         }
-      } catch (pubErr) {
-        console.warn('Tier 2 public mailbox fetch error:', pubErr);
+      } catch (directErr) {
+        console.warn('Tier 2 direct fetch error:', directErr);
       }
     }
 
