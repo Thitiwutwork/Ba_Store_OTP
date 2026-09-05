@@ -320,9 +320,9 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
   // Handle PIN Unlock Submit
   const handlePinSubmit = (e) => {
     if (e) e.preventDefault();
-    const sanitized = pinInput.replace(/\D/g, '').slice(0, 8);
-    if (!sanitized || sanitized.length < 4) {
-      setPinErrorMessage('กรุณากรอกรหัส PIN ให้ครบถ้วน (ตัวเลข 4-6 หลัก)');
+    const sanitized = pinInput.replace(/\D/g, '').slice(0, 6);
+    if (!sanitized || sanitized.length !== 6) {
+      setPinErrorMessage('กรุณากรอกรหัส PIN ให้ครบ 6 หลัก');
       return;
     }
     setPinErrorMessage('');
@@ -589,7 +589,7 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
                     กล่องจดหมายนี้ถูกล็อคด้วยรหัส PIN
                   </h3>
                   <p className="text-xs sm:text-sm text-gray-500">
-                    อีเมล <span className="font-mono font-bold text-rose-600">{activeEmail || pendingEmail}</span> มีการตั้งรหัสผ่านป้องกันไว้ กรุณากรอกรหัส PIN (ตัวเลข 4-6 หลัก) เพื่อเข้าถึงข้อความและดูรหัส OTP
+                    อีเมล <span className="font-mono font-bold text-rose-600">{activeEmail || pendingEmail}</span> มีการตั้งรหัสผ่านป้องกันไว้ กรุณากรอกรหัส PIN (ตัวเลข 6 หลัก) เพื่อเข้าถึงข้อความและดูรหัส OTP
                   </p>
                 </div>
 
@@ -809,14 +809,14 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
       {/* PIN Unlock Modal */}
       {isPinModalOpen && (
         <div 
-          className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-200"
+          className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 pb-20 sm:pb-28 animate-in fade-in duration-200"
           onClick={() => {
             setIsPinModalOpen(false);
             setIsSubmittingPin(false);
           }}
         >
           <div 
-            className="bg-white rounded-3xl p-6 sm:p-8 max-w-md w-full border border-pink-100 shadow-2xl space-y-6 relative overflow-hidden"
+            className="bg-white rounded-3xl p-6 sm:p-7 max-w-md w-full border border-pink-100 shadow-2xl space-y-5 relative overflow-hidden -translate-y-8 sm:-translate-y-12"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Decorative gradient corner */}
@@ -837,9 +837,9 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
             </button>
 
             {/* Modal Header */}
-            <div className="text-center space-y-2 pt-2">
-              <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-pink-500 to-rose-500 text-white flex items-center justify-center mx-auto shadow-md shadow-pink-500/20">
-                <Lock className="w-7 h-7" />
+            <div className="text-center space-y-2 pt-1">
+              <div className="w-13 h-13 rounded-2xl bg-gradient-to-tr from-pink-500 to-rose-500 text-white flex items-center justify-center mx-auto shadow-md shadow-pink-500/20">
+                <Lock className="w-6 h-6" />
               </div>
               <h3 className="text-xl font-bold text-gray-900 font-['Prompt']">
                 ใส่รหัส PIN กล่องข้อความ
@@ -855,56 +855,56 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
             </div>
 
             {/* PIN Input Form */}
-            <form onSubmit={handlePinSubmit} className="space-y-4">
-              <div className="space-y-1.5">
-                <label className="block text-xs font-semibold text-gray-700 text-center">
-                  รหัส PIN (ตัวเลข 4-6 หลัก)
+            <form onSubmit={handlePinSubmit} className="space-y-4 pt-1">
+              <div className="space-y-2">
+                <label className="block text-xs sm:text-sm font-semibold text-gray-700 text-center">
+                  รหัส PIN (ตัวเลข 6 หลัก)
                 </label>
-                <div className="relative max-w-[240px] mx-auto">
+                <div className="relative max-w-[220px] mx-auto">
                   <input
                     ref={pinInputRef}
                     type="password"
                     inputMode="numeric"
                     pattern="[0-9]*"
-                    maxLength={8}
+                    maxLength={6}
                     autoComplete="one-time-code"
                     value={pinInput}
                     onChange={(e) => {
-                      const val = e.target.value.replace(/\D/g, '').slice(0, 8);
+                      const val = e.target.value.replace(/\D/g, '').slice(0, 6);
                       setPinInput(val);
                       if (pinErrorMessage) setPinErrorMessage('');
                     }}
                     placeholder="••••••"
-                    className="w-full text-center tracking-[0.4em] font-mono text-2xl font-bold py-3 px-4 rounded-2xl border-2 border-pink-200 focus:border-pink-500 focus:ring-4 focus:ring-pink-100 outline-none bg-pink-50/20 text-gray-800 transition-all placeholder:tracking-normal placeholder:font-normal placeholder:text-gray-300"
+                    className="w-full text-center tracking-[0.4em] font-mono text-2xl font-bold py-2.5 px-4 rounded-2xl border-2 border-pink-200 focus:border-pink-500 focus:ring-4 focus:ring-pink-100 outline-none bg-pink-50/20 text-gray-800 transition-all placeholder:tracking-normal placeholder:font-normal placeholder:text-gray-300"
                   />
                 </div>
               </div>
 
               {/* Error message inside modal */}
               {pinErrorMessage && (
-                <div className="bg-rose-50 border border-rose-200 text-rose-600 text-xs rounded-xl p-3 flex items-center justify-center gap-2 animate-in fade-in">
+                <div className="bg-rose-50 border border-rose-200 text-rose-600 text-xs rounded-xl p-2.5 flex items-center justify-center gap-2 animate-in fade-in">
                   <AlertCircle className="w-4 h-4 shrink-0 text-rose-500" />
                   <span>{pinErrorMessage}</span>
                 </div>
               )}
 
               {/* Action Buttons */}
-              <div className="flex items-center gap-2.5 pt-2">
+              <div className="flex items-center gap-2.5 pt-1">
                 <button
                   type="button"
                   onClick={() => {
                     setIsPinModalOpen(false);
                     setIsSubmittingPin(false);
                   }}
-                  className="w-1/3 py-3 rounded-xl border border-gray-200 hover:bg-gray-50 text-gray-600 text-xs sm:text-sm font-semibold transition-all cursor-pointer"
+                  className="w-1/3 py-2.5 rounded-xl border border-gray-200 hover:bg-gray-50 text-gray-600 text-xs sm:text-sm font-semibold transition-all cursor-pointer"
                 >
                   ยกเลิก
                 </button>
 
                 <button
                   type="submit"
-                  disabled={isSubmittingPin || !pinInput}
-                  className="flex-1 py-3 rounded-xl bg-gradient-to-r from-rose-500 via-pink-600 to-purple-600 hover:opacity-95 active:scale-98 text-white text-xs sm:text-sm font-bold shadow-md shadow-pink-500/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
+                  disabled={isSubmittingPin || !pinInput || pinInput.length !== 6}
+                  className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-rose-500 via-pink-600 to-purple-600 hover:opacity-95 active:scale-98 text-white text-xs sm:text-sm font-bold shadow-md shadow-pink-500/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
                 >
                   {isSubmittingPin ? (
                     <>
