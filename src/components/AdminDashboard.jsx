@@ -52,7 +52,7 @@ export default function AdminDashboard({ onExitToClient }) {
   const [stats, setStats] = useState({
     totalEmails: 0,
     totalMailboxes: 0,
-    totalDomains: 5,
+    totalDomains: 1,
     totalOtps: 0,
     emailsToday: 0,
     recentEmails: []
@@ -368,20 +368,17 @@ export default function AdminDashboard({ onExitToClient }) {
     return `${day}/${month} ${hours}:${mins}`;
   };
 
-  // Master domains list matching user's Image 2
-  const masterDomains = [
-    { name: "baxsv.store", source: "ผู้ใช้", status: "เปิดใช้งาน", count: 4107 },
-    { name: "xbasv.store", source: "ผู้ใช้", status: "เปิดใช้งาน", count: 0 },
-    { name: "xbasv.com", source: "ผู้ใช้", status: "เปิดใช้งาน", count: 3169 },
-    {
-      name: "namenoname.store",
+  // Master domains list from database (no mock domains)
+  const masterDomains = (domains && domains.length > 0 ? domains : [{ name: "namenoname.store" }]).map((dom) => {
+    const dName = dom.name || (typeof dom === "string" ? dom : "namenoname.store");
+    const count = mailboxes.filter((m) => m.address && m.address.toLowerCase().endsWith(`@${dName.toLowerCase()}`)).length;
+    return {
+      name: dName,
       source: "ผู้ใช้",
       status: "เปิดใช้งาน",
-      count: mailboxes.filter((m) => m.address.endsWith("@namenoname.store")).length || mailboxes.length
-    },
-    { name: "lico.moe", source: "ระบบ", status: "เปิดใช้งาน", count: 1 },
-    { name: "rdcw.plus", source: "ระบบ", status: "เปิดใช้งาน", count: 0 }
-  ];
+      count: count
+    };
+  });
 
   // Filtered / Paged Emails
   const paginatedEmails = emails.slice((inboxPage - 1) * pageSize, inboxPage * pageSize);
@@ -918,12 +915,7 @@ export default function AdminDashboard({ onExitToClient }) {
                     </table>
                   </div>
 
-                  {/* Footer link */}
-                  <div className="p-6 text-center border-t border-slate-100">
-                    <p className="text-xs text-slate-700 font-bold">
-                      ต้องการโดเมนของตัวเอง? - <a href="#support" className="text-indigo-600 underline">ติดต่อเราเลย!</a>
-                    </p>
-                  </div>
+
 
                 </div>
               ) : (
