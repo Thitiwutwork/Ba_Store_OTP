@@ -40,9 +40,11 @@ import {
   createBatchMailboxes,
   updateMailboxPin,
   deleteMailbox,
+  deleteBatchMailboxes,
   fetchDomains,
   adminLogout,
-  updateAdminPassword
+  updateAdminPassword,
+  fixThaiMojibake
 } from "../services/adminService";
 
 export default function AdminDashboard({ onExitToClient }) {
@@ -88,6 +90,24 @@ export default function AdminDashboard({ onExitToClient }) {
   const [batchCount, setBatchCount] = useState(10);
   const [isCreatingSingle, setIsCreatingSingle] = useState(false);
   const [isCreatingBatch, setIsCreatingBatch] = useState(false);
+
+  // Result Modal after Creation (Image 1 replica)
+  const [isResultModalOpen, setIsResultModalOpen] = useState(false);
+  const [createdResultList, setCreatedResultList] = useState([]);
+  const [copiedResultAll, setCopiedResultAll] = useState(false);
+
+  // Mailbox multi-select & Drill-down search/pagination (Image 2 & 3)
+  const [selectedMailboxIds, setSelectedMailboxIds] = useState([]);
+  const [mailboxSearchQuery, setMailboxSearchQuery] = useState("");
+  const [mailboxPage, setMailboxPage] = useState(1);
+  const [mailboxPageSize, setMailboxPageSize] = useState(10);
+
+  // Global inline toast
+  const [toastMessage, setToastMessage] = useState(null);
+  const showLocalToast = (msg) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 3000);
+  };
 
   // Edit PIN Modal
   const [editingMailbox, setEditingMailbox] = useState(null);
@@ -287,6 +307,9 @@ export default function AdminDashboard({ onExitToClient }) {
       setIsCreateModalOpen(false);
       setSinglePrefix("");
       setCustomPinVal("");
+      setCreatedResultList([address]);
+      setIsResultModalOpen(true);
+      showLocalToast("สร้างบัญชีเรียบร้อยแล้ว");
       loadData();
     } else {
       alert("เกิดข้อผิดพลาด: " + (res.error || "สร้างบัญชีไม่สำเร็จ"));
@@ -314,19 +337,75 @@ export default function AdminDashboard({ onExitToClient }) {
       setIsCreateModalOpen(false);
       setSinglePrefix("");
       setCustomPinVal("");
+      setCreatedResultList(addresses);
+      setIsResultModalOpen(true);
+      showLocalToast("สร้างบัญชีเรียบร้อยแล้ว");
       loadData();
     } else {
       alert("เกิดข้อผิดพลาดในการสร้างหลายบัญชี");
     }
   };
 
-  // Handle Delete Mailbox
+  // Toggle selection for single mailbox
+  const toggleSelectMailbox = (id) => {
+    setSelectedMailboxIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
+  // Toggle select all visible mailboxes
+  const handleToggleSelectAllMailboxes = (visibleIds) => {
+    const isAllSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedMailboxIds.includes(id));
+    if (isAllSelected) {
+      setSelectedMailboxIds((prev) => prev.filter((id) => !visibleIds.includes(id)));
+    } else {
+      setSelectedMailboxIds((prev) => Array.from(new Set([...prev, ...visibleIds])));
+    }
+  };
+
+  // Handle Bulk Delete Mailboxes
+  const handleBulkDeleteMailboxes = async () => {
+    if (selectedMailboxIds.length === 0) return;
+    if (!window.confirm(`คุณต้องการลบกล่องข้อความที่เลือกทั้งหมดจำนวน ${selectedMailboxIds.length} บัญชีใช่หรือไม่? (อีเมลทั้งหมดในกล่องเหล่านี้จะถูกลบด้วย)`)) return;
+
+    setIsLoading(true);
+    const res = await deleteBatchMailboxes(selectedMailboxIds);
+    setIsLoading(false);
+
+    if (res.success) {
+      setMailboxes((prev) => prev.filter((m) => !selectedMailboxIds.includes(m.id)));
+      setSelectedMailboxIds([]);
+      loadData();
+      showLocalToast("ลบกล่องข้อความเรียบร้อยแล้ว");
+    } else {
+      alert("ไม่สามารถลบกล่องข้อความได้");
+    }
+  };
+
+  // Copy Mailbox to Clipboard
+  const handleCopyMailboxAddress = (address) => {
+    navigator.clipboard.writeText(address);
+    showLocalToast(`คัดลอก ${address} เรียบร้อยแล้ว`);
+  };
+
+  // Copy all created mailboxes in result modal
+  const handleCopyAllCreated = () => {
+    if (createdResultList.length === 0) return;
+    navigator.clipboard.writeText(createdResultList.join("\n"));
+    setCopiedResultAll(true);
+    showLocalToast("คัดลอกบัญชีเมลทั้งหมดเรียบร้อยแล้ว");
+    setTimeout(() => setCopiedResultAll(false), 2000);
+  };
+
+  // Handle Delete Single Mailbox
   const handleDeleteMailbox = async (id, address) => {
     if (!window.confirm(`คุณต้องการลบกล่องข้อความ ${address} ใช่หรือไม่? (อีเมลที่ผูกไว้ทั้งหมดจะถูกลบด้วย)`)) return;
     const res = await deleteMailbox(id);
     if (res.success) {
       setMailboxes((prev) => prev.filter((m) => m.id !== id));
+      setSelectedMailboxIds((prev) => prev.filter((x) => x !== id));
       loadData();
+      showLocalToast(`ลบ ${address} เรียบร้อยแล้ว`);
     } else {
       alert("ไม่สามารถลบกล่องข้อความได้");
     }
@@ -388,8 +467,19 @@ export default function AdminDashboard({ onExitToClient }) {
 
   // Filter mailboxes for drill-down view
   const drillDownMailboxes = selectedDomainDrillDown
-    ? mailboxes.filter((m) => m.address.endsWith(`@${selectedDomainDrillDown}`))
+    ? mailboxes.filter((m) => m.address.toLowerCase().endsWith(`@${selectedDomainDrillDown.toLowerCase()}`))
     : mailboxes;
+
+  const filteredDrillDown = drillDownMailboxes.filter((m) =>
+    !mailboxSearchQuery || m.address.toLowerCase().includes(mailboxSearchQuery.toLowerCase().trim())
+  );
+  const totalMailboxPages = Math.ceil(filteredDrillDown.length / mailboxPageSize) || 1;
+  const paginatedMailboxes = filteredDrillDown.slice(
+    (mailboxPage - 1) * mailboxPageSize,
+    mailboxPage * mailboxPageSize
+  );
+  const visibleMailboxIds = paginatedMailboxes.map((m) => m.id);
+  const isAllVisibleSelected = visibleMailboxIds.length > 0 && visibleMailboxIds.every((id) => selectedMailboxIds.includes(id));
 
   return (
     <div className="min-h-screen bg-[#FDF5F8] flex font-['Prompt'] text-slate-800 selection:bg-pink-200 selection:text-pink-900">
@@ -966,115 +1056,290 @@ export default function AdminDashboard({ onExitToClient }) {
 
                 </div>
               ) : (
-                /* Drill-down: Show mailboxes under the selected domain */
+                /* Drill-down: Show mailboxes under the selected domain (Image 3 Replica) */
                 <div className="bg-white rounded-2xl border border-pink-100 shadow-xs overflow-hidden">
-                  
-                  {/* Header */}
-                  <div className="px-6 py-4 border-b border-pink-100 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <button
-                        onClick={() => setSelectedDomainDrillDown(null)}
-                        className="p-1.5 rounded-xl bg-pink-50 hover:bg-pink-100 text-pink-700 transition-colors cursor-pointer"
-                        title="กลับหน้ารวมโดเมน"
-                      >
-                        <ArrowLeft className="w-4 h-4" />
-                      </button>
-                      <div>
-                        <h3 className="text-base font-bold text-slate-900">
-                          บัญชีเมลของ: <span className="text-rose-600 font-mono font-bold">@{selectedDomainDrillDown}</span>
-                        </h3>
-                        <p className="text-xs text-slate-400 mt-0.5">
-                          พบทั้งหมด {drillDownMailboxes.length} บัญชี
-                        </p>
+                      
+                      {/* Top Bar Header (Image 3) */}
+                      <div className="px-4 sm:px-6 py-4 border-b border-pink-100 flex flex-wrap items-center justify-between gap-3">
+                        {/* Left: Back Arrow + Domain + Search Box */}
+                        <div className="flex flex-wrap items-center gap-3 flex-1 min-w-[280px]">
+                          <button
+                            onClick={() => {
+                              setSelectedDomainDrillDown(null);
+                              setSelectedMailboxIds([]);
+                              setMailboxSearchQuery("");
+                            }}
+                            className="flex items-center gap-2 text-slate-800 hover:text-rose-600 font-bold text-base transition-colors cursor-pointer shrink-0"
+                            title="กลับหน้ารวมโดเมน"
+                          >
+                            <ArrowLeft className="w-5 h-5" />
+                            <span>{selectedDomainDrillDown}</span>
+                          </button>
+
+                          {/* Search Mailbox inside Domain */}
+                          <div className="relative flex-1 max-w-xs">
+                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                              <Search className="w-3.5 h-3.5" />
+                            </div>
+                            <input
+                              type="text"
+                              value={mailboxSearchQuery}
+                              onChange={(e) => {
+                                setMailboxSearchQuery(e.target.value);
+                                setMailboxPage(1);
+                              }}
+                              placeholder="ค้นหา"
+                              className="w-full pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Right: Actions (Image 3) */}
+                        <div className="flex flex-wrap items-center gap-2">
+                          {/* Bulk Delete Button when items selected */}
+                          {selectedMailboxIds.length > 0 && (
+                            <button
+                              onClick={handleBulkDeleteMailboxes}
+                              className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all shadow-xs animate-in fade-in cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>ลบที่เลือก ({selectedMailboxIds.length} บัญชี)</span>
+                            </button>
+                          )}
+
+                          {/* สร้างบัญชีเมลใหม่ + */}
+                          <button
+                            onClick={() => {
+                              setTargetCreateDomain(selectedDomainDrillDown);
+                              setIsCreateModalOpen(true);
+                            }}
+                            className="px-3.5 py-2 bg-[#2E3192] hover:bg-indigo-900 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                          >
+                            <span>สร้างบัญชีเมลใหม่ +</span>
+                          </button>
+
+                          {/* จัดการตัวกรอง */}
+                          <button
+                            onClick={() => setActiveTab("filters")}
+                            className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+                          >
+                            <Filter className="w-3.5 h-3.5 text-slate-500" />
+                            <span>จัดการตัวกรอง</span>
+                          </button>
+
+                          {/* จัดการ PIN */}
+                          <button
+                            onClick={() => {
+                              if (selectedMailboxIds.length === 0) {
+                                alert("กรุณาเลือกบัญชีเมลที่ต้องการจัดการ PIN ด้วยการติ๊กถูกหน้าช่องก่อนครับ");
+                              } else {
+                                const newPin = prompt("กรุณากรอกรหัส PIN 6 หลักที่ต้องการตั้งให้กับบัญชีที่เลือก:");
+                                if (newPin !== null) {
+                                  Promise.all(selectedMailboxIds.map((id) => updateMailboxPin(id, newPin))).then(() => {
+                                    loadData();
+                                    showLocalToast("อัปเดตรหัส PIN บัญชีที่เลือกเรียบร้อยแล้ว");
+                                  });
+                                }
+                              }
+                            }}
+                            className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+                          >
+                            <Lock className="w-3.5 h-3.5 text-slate-500" />
+                            <span>จัดการ PIN</span>
+                          </button>
+                        </div>
                       </div>
-                    </div>
 
-                    <button
-                      onClick={() => {
-                        setTargetCreateDomain(selectedDomainDrillDown);
-                        setIsCreateModalOpen(true);
-                      }}
-                      className="px-4 py-2 bg-gradient-to-r from-rose-500 to-pink-600 hover:from-rose-600 hover:to-pink-700 text-white rounded-xl text-xs font-semibold flex items-center gap-2 shadow-xs transition-colors cursor-pointer"
-                    >
-                      <Plus className="w-4 h-4" />
-                      <span>สร้างเมลใหม่</span>
-                    </button>
-                  </div>
-
-                  {/* Table of mailboxes */}
-                  <div className="overflow-x-auto">
-                    <table className="w-full min-w-[620px] text-left text-xs">
-                      <thead className="bg-[#2E3192] text-white font-semibold whitespace-nowrap">
-                        <tr>
-                          <th className="py-3.5 px-4 sm:px-5">ที่อยู่อีเมล</th>
-                          <th className="py-3.5 px-4 sm:px-5">ระบบล็อค PIN</th>
-                          <th className="py-3.5 px-4 sm:px-5">บันทึกช่วยจำ</th>
-                          <th className="py-3.5 px-4 sm:px-5">วันที่สร้าง</th>
-                          <th className="py-3.5 px-4 sm:px-5 text-center">จัดการ</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 whitespace-nowrap">
-                        {drillDownMailboxes.map((mb) => (
-                          <tr key={mb.id} className="hover:bg-slate-50 transition-colors">
-                            <td className="py-4 px-5 font-mono text-rose-700 font-bold text-sm">
-                              {mb.address}
-                            </td>
-                            <td className="py-4 px-5">
-                              {mb.pin_code ? (
-                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-50 text-amber-800 font-medium text-[11px] border border-amber-200">
-                                  <Lock className="w-3 h-3 text-amber-600" />
-                                  <span>PIN: {mb.pin_code}</span>
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-100 text-slate-500 font-normal text-[11px]">
-                                  <Unlock className="w-3 h-3 text-slate-400" />
-                                  <span>ไม่ได้ตั้งรหัส</span>
-                                </span>
-                              )}
-                            </td>
-                            <td className="py-4 px-5 text-slate-600">
-                              {mb.note || "-"}
-                            </td>
-                            <td className="py-4 px-5 text-slate-400 whitespace-nowrap">
-                              {formatDate(mb.created_at)}
-                            </td>
-                            <td className="py-4 px-5 text-center whitespace-nowrap">
-                              <div className="flex items-center justify-center gap-2">
+                      {/* Table (Image 3 replica) */}
+                      <div className="overflow-x-auto">
+                        <table className="w-full min-w-[700px] text-left text-xs">
+                          <thead className="bg-[#2E3192] text-white font-semibold whitespace-nowrap">
+                            <tr>
+                              {/* Select All Checkbox */}
+                              <th className="py-3.5 px-4 w-12 text-center">
                                 <button
-                                  onClick={() => {
-                                    setEditingMailbox(mb);
-                                    setPinEditVal(mb.pin_code || "");
-                                  }}
-                                  className="px-2.5 py-1.5 rounded-lg bg-pink-50 hover:bg-pink-100 text-pink-700 font-medium text-[11px] flex items-center gap-1 transition-colors cursor-pointer"
+                                  onClick={() => handleToggleSelectAllMailboxes(visibleMailboxIds)}
+                                  className="text-white/80 hover:text-white flex items-center justify-center cursor-pointer"
+                                  title="เลือกทั้งหมดในหน้านี้"
                                 >
-                                  <KeyRound className="w-3 h-3" />
-                                  <span>ตั้ง PIN</span>
+                                  {isAllVisibleSelected ? (
+                                    <CheckSquare className="w-4 h-4 text-pink-300" />
+                                  ) : (
+                                    <Square className="w-4 h-4 text-white/50" />
+                                  )}
                                 </button>
-                                <button
-                                  onClick={() => handleDeleteMailbox(mb.id, mb.address)}
-                                  className="w-7 h-7 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 flex items-center justify-center transition-colors cursor-pointer"
-                                  title="ลบบัญชี"
+                              </th>
+                              <th className="py-3.5 px-4">บัญชีเมล</th>
+                              <th className="py-3.5 px-6 text-right">จัดการ</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 whitespace-nowrap">
+                            {paginatedMailboxes.map((mb) => {
+                              const isSelected = selectedMailboxIds.includes(mb.id);
+                              return (
+                                <tr
+                                  key={mb.id}
+                                  className={`transition-colors ${
+                                    isSelected ? "bg-pink-50/50" : "hover:bg-slate-50"
+                                  }`}
                                 >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
+                                  {/* Checkbox */}
+                                  <td className="py-3.5 px-4 text-center whitespace-nowrap">
+                                    <button
+                                      onClick={() => toggleSelectMailbox(mb.id)}
+                                      className="text-slate-400 hover:text-rose-600 flex items-center justify-center cursor-pointer"
+                                    >
+                                      {isSelected ? (
+                                        <CheckSquare className="w-4 h-4 text-rose-600" />
+                                      ) : (
+                                        <Square className="w-4 h-4" />
+                                      )}
+                                    </button>
+                                  </td>
 
-                        {drillDownMailboxes.length === 0 && (
-                          <tr>
-                            <td colSpan="5" className="py-12 text-center text-slate-400">
-                              ยังไม่มีกล่องข้อความในโดเมนนี้ (กดปุ่ม "สร้างเมลใหม่" ด้านบนได้เลยครับ)
-                            </td>
-                          </tr>
+                                  {/* บัญชีเมล */}
+                                  <td className="py-3.5 px-4 font-mono font-medium text-slate-800 text-xs whitespace-nowrap">
+                                    {mb.address}
+                                  </td>
+
+                                  {/* จัดการ (Image 3 Buttons: PIN, คัดลอก, อีเมล, ตัวกรอง, ลบบัญชี) */}
+                                  <td className="py-3.5 px-6 text-right whitespace-nowrap">
+                                    <div className="flex items-center justify-end gap-2">
+                                      {/* ปุ่ม PIN */}
+                                      {mb.pin_code ? (
+                                        <button
+                                          onClick={() => {
+                                            setEditingMailbox(mb);
+                                            setPinEditVal(mb.pin_code);
+                                          }}
+                                          className="px-2.5 py-1 rounded-lg bg-[#F59E0B] hover:bg-[#D97706] text-white font-bold text-[11px] flex items-center gap-1 shadow-xs transition-colors cursor-pointer"
+                                          title={`รหัส PIN: ${mb.pin_code}`}
+                                        >
+                                          <Lock className="w-3 h-3" />
+                                          <span>PIN: {mb.pin_code}</span>
+                                        </button>
+                                      ) : (
+                                        <button
+                                          onClick={() => {
+                                            setEditingMailbox(mb);
+                                            setPinEditVal("");
+                                          }}
+                                          className="px-2.5 py-1 rounded-lg bg-slate-400 hover:bg-slate-500 text-white font-medium text-[11px] flex items-center gap-1 shadow-xs transition-colors cursor-pointer"
+                                          title="ตั้งรหัส PIN"
+                                        >
+                                          <Unlock className="w-3 h-3" />
+                                          <span>PIN</span>
+                                        </button>
+                                      )}
+
+                                      {/* ปุ่ม คัดลอก */}
+                                      <button
+                                        onClick={() => handleCopyMailboxAddress(mb.address)}
+                                        className="px-2.5 py-1 rounded-lg bg-[#F59E0B] hover:bg-[#D97706] text-white font-bold text-[11px] flex items-center gap-1 shadow-xs transition-colors cursor-pointer"
+                                        title="คัดลอกที่อยู่อีเมล"
+                                      >
+                                        <Copy className="w-3 h-3" />
+                                        <span>คัดลอก</span>
+                                      </button>
+
+                                      {/* ปุ่ม อีเมล */}
+                                      <button
+                                        onClick={() => {
+                                          setSearchQuery(mb.address);
+                                          setActiveTab("inbox");
+                                        }}
+                                        className="px-2.5 py-1 rounded-lg bg-[#10B981] hover:bg-[#059669] text-white font-bold text-[11px] flex items-center gap-1 shadow-xs transition-colors cursor-pointer"
+                                        title="ดูอีเมลของบัญชีนี้ในกล่องจดหมาย"
+                                      >
+                                        <Mail className="w-3 h-3" />
+                                        <span>อีเมล</span>
+                                      </button>
+
+                                      {/* ปุ่ม ตัวกรอง */}
+                                      <button
+                                        onClick={() => setActiveTab("filters")}
+                                        className="px-2.5 py-1 rounded-lg bg-[#EAB308] hover:bg-[#CA8A04] text-white font-bold text-[11px] flex items-center gap-1 shadow-xs transition-colors cursor-pointer"
+                                        title="ดูและจัดการตัวกรอง"
+                                      >
+                                        <Filter className="w-3 h-3" />
+                                        <span>ตัวกรอง</span>
+                                      </button>
+
+                                      {/* ปุ่ม ลบบัญชี */}
+                                      <button
+                                        onClick={() => handleDeleteMailbox(mb.id, mb.address)}
+                                        className="px-2.5 py-1 rounded-lg bg-[#EF4444] hover:bg-[#DC2626] text-white font-bold text-[11px] flex items-center gap-1 shadow-xs transition-colors cursor-pointer"
+                                        title="ลบบัญชีนี้"
+                                      >
+                                        <Trash2 className="w-3 h-3" />
+                                        <span>ลบบัญชี</span>
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+
+                            {filteredDrillDown.length === 0 && (
+                              <tr>
+                                <td colSpan="3" className="py-12 text-center text-slate-400">
+                                  {mailboxSearchQuery
+                                    ? `ไม่พบบัญชีเมลที่ตรงกับ "${mailboxSearchQuery}"`
+                                    : "ยังไม่มีกล่องข้อความในโดเมนนี้ (กดปุ่ม \"สร้างบัญชีเมลใหม่ +\" ด้านบนได้เลยครับ)"}
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Footer / Pagination (Image 3) */}
+                      <div className="px-6 py-4 border-t border-slate-100 flex flex-wrap items-center justify-between gap-4 text-xs text-slate-500">
+                        <div className="flex items-center gap-3">
+                          <span>จำนวนต่อหน้า:</span>
+                          <select
+                            value={mailboxPageSize}
+                            onChange={(e) => {
+                              setMailboxPageSize(Number(e.target.value));
+                              setMailboxPage(1);
+                            }}
+                            className="px-2.5 py-1 border border-slate-200 rounded-lg bg-white text-xs font-semibold text-slate-700 cursor-pointer"
+                          >
+                            <option value={10}>10</option>
+                            <option value={25}>25</option>
+                            <option value={50}>50</option>
+                          </select>
+                          <span className="text-slate-400">
+                            ทั้งหมด {filteredDrillDown.length} บัญชี
+                            {selectedMailboxIds.length > 0 && ` (เลือกอยู่ ${selectedMailboxIds.length})`}
+                          </span>
+                        </div>
+
+                        {totalMailboxPages > 1 && (
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => setMailboxPage((p) => Math.max(1, p - 1))}
+                              disabled={mailboxPage <= 1}
+                              className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 transition-colors cursor-pointer"
+                            >
+                              ก่อนหน้า
+                            </button>
+                            <span className="px-2 text-slate-600 font-semibold">
+                              {mailboxPage} / {totalMailboxPages}
+                            </span>
+                            <button
+                              onClick={() => setMailboxPage((p) => Math.min(totalMailboxPages, p + 1))}
+                              disabled={mailboxPage >= totalMailboxPages}
+                              className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 transition-colors cursor-pointer"
+                            >
+                              ถัดไป
+                            </button>
+                          </div>
                         )}
-                      </tbody>
-                    </table>
-                  </div>
+                      </div>
 
-                </div>
-              )}
+                    </div>
+                  )}
 
             </div>
           )}
@@ -1241,7 +1506,7 @@ export default function AdminDashboard({ onExitToClient }) {
 
               <div className="bg-slate-50 p-3 rounded-xl text-xs">
                 <span className="text-slate-400 block mb-0.5">หัวข้อ (Subject):</span>
-                <span className="font-bold text-slate-900">{viewingMail.subject}</span>
+                <span className="font-bold text-slate-900">{fixThaiMojibake(viewingMail.subject)}</span>
               </div>
 
               <div>
@@ -1249,11 +1514,11 @@ export default function AdminDashboard({ onExitToClient }) {
                 {viewingMail.body_html ? (
                   <div
                     className="p-4 bg-white border border-slate-200 rounded-xl text-xs overflow-x-auto leading-relaxed"
-                    dangerouslySetInnerHTML={{ __html: viewingMail.body_html }}
+                    dangerouslySetInnerHTML={{ __html: fixThaiMojibake(viewingMail.body_html) }}
                   />
                 ) : (
                   <pre className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-xs whitespace-pre-wrap font-sans text-slate-800">
-                    {viewingMail.body_text || "(ไม่มีข้อความ)"}
+                    {fixThaiMojibake(viewingMail.body_text) || "(ไม่มีข้อความ)"}
                   </pre>
                 )}
               </div>
@@ -1468,6 +1733,66 @@ export default function AdminDashboard({ onExitToClient }) {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* ================= RESULT MODAL AFTER CREATION (Image 1 Exact Replica) ================= */}
+      {isResultModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl p-6 sm:p-7 animate-in fade-in zoom-in-95 relative">
+            
+            {/* Close button */}
+            <button
+              onClick={() => setIsResultModalOpen(false)}
+              className="absolute top-5 right-5 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <h4 className="font-bold text-lg text-slate-900 mb-4">เสร็จสิ้น</h4>
+
+            {/* Textarea showing generated emails */}
+            <div className="mb-5">
+              <textarea
+                readOnly
+                rows={Math.min(Math.max(createdResultList.length, 3), 10)}
+                value={createdResultList.join("\n")}
+                onClick={(e) => e.target.select()}
+                className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-mono text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 selection:bg-indigo-100 selection:text-indigo-900 resize-none leading-relaxed"
+              />
+              <p className="text-[11px] text-slate-400 mt-1.5">
+                สามารถไฮไลท์เพื่อคัดลอกรายชื่อ หรือกดปุ่มคัดลอกทั้งหมดด้านล่างได้ทันที
+              </p>
+            </div>
+
+            {/* Copy All Button (Blue button matching Image 1) */}
+            <button
+              type="button"
+              onClick={handleCopyAllCreated}
+              className="w-full py-3 px-4 bg-[#2E3192] hover:bg-indigo-900 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
+            >
+              {copiedResultAll ? (
+                <>
+                  <Check className="w-4 h-4 text-emerald-400" />
+                  <span>คัดลอกเรียบร้อยแล้ว!</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-4 h-4" />
+                  <span>คัดลอก</span>
+                </>
+              )}
+            </button>
+
+          </div>
+        </div>
+      )}
+
+      {/* ================= INLINE BOTTOM TOAST (Matching Image 1) ================= */}
+      {toastMessage && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-5 py-2.5 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-800 text-xs font-semibold shadow-lg flex items-center gap-2 animate-in fade-in slide-in-from-bottom-2">
+          <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+          <span>{toastMessage}</span>
         </div>
       )}
 

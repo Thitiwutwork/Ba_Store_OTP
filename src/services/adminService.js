@@ -268,6 +268,40 @@ export async function deleteMailbox(mailboxId) {
 }
 
 /**
+ * ลบกล่องข้อความหลายบัญชีพร้อมกัน (Batch Delete Mailboxes)
+ */
+export async function deleteBatchMailboxes(mailboxIds) {
+  try {
+    if (!mailboxIds || mailboxIds.length === 0) return { success: true };
+    const idList = mailboxIds.join(",");
+    const res = await fetch(`${BASE_URL}/rest/v1/mailboxes?id=in.(${idList})`, {
+      method: "DELETE",
+      headers: adminHeaders
+    });
+    return { success: res.ok };
+  } catch (err) {
+    console.error("deleteBatchMailboxes error:", err);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * แก้ไขปัญหาตัวอักษรภาษาไทยเพี้ยน (Mojibake UTF-8 vs Latin1)
+ */
+export function fixThaiMojibake(str) {
+  if (!str || typeof str !== "string") return str;
+  if (/à¸[-¿]|à¹[-¿]/.test(str)) {
+    try {
+      const bytes = Uint8Array.from(str, (c) => c.charCodeAt(0) & 0xff);
+      return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    } catch {
+      return str;
+    }
+  }
+  return str;
+}
+
+/**
  * ดึงรายชื่อโดเมนทั้งหมด
  */
 export async function fetchDomains() {

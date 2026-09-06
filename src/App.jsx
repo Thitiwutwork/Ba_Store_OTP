@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldCheck } from 'lucide-react';
 import OtpMailboxPage from './components/OtpMailboxPage';
 import Toast from './components/Toast';
 import AdminDashboard from './components/AdminDashboard';
@@ -92,17 +91,6 @@ export default function App() {
               <p className="text-[10px] sm:text-[11px] text-gray-500 font-normal">ระบบดึงรหัสยืนยัน OTP อัตโนมัติ 24 ชม.</p>
             </div>
           </div>
-
-          {/* Admin Switch Button */}
-          <button
-            onClick={handleOpenAdmin}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition-all shadow-xs hover:shadow-sm cursor-pointer"
-            title="เข้าสู่ระบบจัดการแอดมิน"
-          >
-            <ShieldCheck className="w-4 h-4 text-indigo-600" />
-            <span className="hidden sm:inline">แดชบอร์ดแอดมิน</span>
-            <span className="sm:hidden">แอดมิน</span>
-          </button>
 
         </div>
       </header>
