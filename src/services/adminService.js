@@ -1,4 +1,4 @@
-﻿import { supabase } from "./supabaseClient";
+import { supabase } from "./supabaseClient";
 
 // Default admin credentials (can be customized)
 const ADMIN_CREDENTIALS = {
@@ -110,7 +110,7 @@ export async function fetchAllEmails(query = "") {
 }
 
 /**
- * ลบอีเมล
+ * ลบอีเมลเดี่ยว
  */
 export async function deleteEmail(emailId) {
   try {
@@ -121,6 +121,64 @@ export async function deleteEmail(emailId) {
     return { success: res.ok };
   } catch (err) {
     console.error("deleteEmail error:", err);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * ลบอีเมลหลายฉบับพร้อมกัน (Batch Delete)
+ */
+export async function deleteBatchEmails(emailIds) {
+  if (!emailIds || emailIds.length === 0) return { success: true };
+  try {
+    const idList = emailIds.map((id) => `"${id}"`).join(",");
+    const res = await fetch(`${BASE_URL}/rest/v1/emails?id=in.(${idList})`, {
+      method: "DELETE",
+      headers: adminHeaders
+    });
+    return { success: res.ok };
+  } catch (err) {
+    console.error("deleteBatchEmails error:", err);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * ล้างอีเมลทั้งหมดในกล่องจดหมาย (Clear All)
+ */
+export async function clearAllEmails() {
+  try {
+    const res = await fetch(`${BASE_URL}/rest/v1/emails?id=neq.00000000-0000-0000-0000-000000000000`, {
+      method: "DELETE",
+      headers: adminHeaders
+    });
+    return { success: res.ok };
+  } catch (err) {
+    console.error("clearAllEmails error:", err);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * สร้างกล่องข้อความหลายบัญชีพร้อมกัน (Batch Create)
+ */
+export async function createBatchMailboxes(addresses, pinCode = null, note = "") {
+  try {
+    const rows = addresses.map((addr) => ({
+      address: addr.toLowerCase().trim(),
+      pin_code: pinCode ? String(pinCode).trim() : null,
+      note: note || null,
+      is_active: true
+    }));
+
+    const res = await fetch(`${BASE_URL}/rest/v1/mailboxes`, {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify(rows)
+    });
+    return { success: res.ok };
+  } catch (err) {
+    console.error("createBatchMailboxes error:", err);
     return { success: false, error: err.message };
   }
 }
