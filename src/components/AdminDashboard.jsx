@@ -26,7 +26,8 @@ import {
   Square,
   ChevronLeft,
   ChevronRight,
-  ArrowLeft
+  ArrowLeft,
+  Menu
 } from "lucide-react";
 import {
   fetchAdminStats,
@@ -48,6 +49,7 @@ export default function AdminDashboard({ onExitToClient }) {
   // Tabs: "overview" | "mailboxes" | "inbox" | "filters" | "settings"
   const [activeTab, setActiveTab] = useState("inbox");
   const [selectedDomainDrillDown, setSelectedDomainDrillDown] = useState(null);
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 
   const [stats, setStats] = useState({
     totalEmails: 0,
@@ -392,22 +394,45 @@ export default function AdminDashboard({ onExitToClient }) {
   return (
     <div className="min-h-screen bg-[#FDF5F8] flex font-['Prompt'] text-slate-800 selection:bg-pink-200 selection:text-pink-900">
       
-      {/* ===================== SIDEBAR ===================== */}
-      <aside className="w-64 bg-white border-r border-pink-100 flex flex-col justify-between shrink-0 shadow-xs">
+      {/* ===================== MOBILE BACKDROP OVERLAY ===================== */}
+      {isMobileSidebarOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-slate-900/50 backdrop-blur-xs lg:hidden transition-opacity duration-300"
+          onClick={() => setIsMobileSidebarOpen(false)}
+        />
+      )}
+
+      {/* ===================== SIDEBAR (Responsive Drawer) ===================== */}
+      <aside
+        className={`fixed inset-y-0 left-0 z-50 w-72 bg-white border-r border-pink-100 flex flex-col justify-between shadow-2xl transition-transform duration-300 ease-in-out lg:static lg:w-64 lg:shadow-xs lg:translate-x-0 ${
+          isMobileSidebarOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
         <div>
-          {/* Brand Logo */}
-          <div className="h-18 flex items-center gap-3 px-6 border-b border-pink-100">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-rose-500 via-pink-600 to-purple-600 flex items-center justify-center text-white shadow-md shadow-pink-500/20">
-              <Mail className="w-5 h-5" />
+          {/* Brand Logo & Mobile Close Button */}
+          <div className="h-16 sm:h-18 flex items-center justify-between px-6 border-b border-pink-100">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-rose-500 via-pink-600 to-purple-600 flex items-center justify-center text-white shadow-md shadow-pink-500/20">
+                <Mail className="w-5 h-5" />
+              </div>
+              <div>
+                <span className="font-bold text-lg bg-gradient-to-r from-rose-500 via-pink-600 to-purple-600 bg-clip-text text-transparent tracking-tight block leading-tight">
+                  BA STORE
+                </span>
+                <span className="text-[10px] text-pink-600 font-bold tracking-wider uppercase">
+                  Admin Console
+                </span>
+              </div>
             </div>
-            <div>
-              <span className="font-bold text-lg bg-gradient-to-r from-rose-500 via-pink-600 to-purple-600 bg-clip-text text-transparent tracking-tight block leading-tight">
-                BA STORE
-              </span>
-              <span className="text-[10px] text-pink-600 font-bold tracking-wider uppercase">
-                Admin Console
-              </span>
-            </div>
+
+            {/* Close button on mobile/tablet */}
+            <button
+              onClick={() => setIsMobileSidebarOpen(false)}
+              className="lg:hidden p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+              title="ปิดเมนู"
+            >
+              <X className="w-5 h-5" />
+            </button>
           </div>
 
           {/* Nav Categories */}
@@ -423,6 +448,7 @@ export default function AdminDashboard({ onExitToClient }) {
                   onClick={() => {
                     setActiveTab("overview");
                     setSelectedDomainDrillDown(null);
+                    setIsMobileSidebarOpen(false);
                   }}
                   className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-medium transition-all cursor-pointer ${
                     activeTab === "overview"
@@ -438,6 +464,7 @@ export default function AdminDashboard({ onExitToClient }) {
                   onClick={() => {
                     setActiveTab("mailboxes");
                     setSelectedDomainDrillDown(null);
+                    setIsMobileSidebarOpen(false);
                   }}
                   className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-medium transition-all cursor-pointer ${
                     activeTab === "mailboxes"
@@ -453,6 +480,7 @@ export default function AdminDashboard({ onExitToClient }) {
                   onClick={() => {
                     setActiveTab("inbox");
                     setSelectedDomainDrillDown(null);
+                    setIsMobileSidebarOpen(false);
                   }}
                   className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-medium transition-all cursor-pointer ${
                     activeTab === "inbox"
@@ -473,6 +501,7 @@ export default function AdminDashboard({ onExitToClient }) {
                   onClick={() => {
                     setActiveTab("filters");
                     setSelectedDomainDrillDown(null);
+                    setIsMobileSidebarOpen(false);
                   }}
                   className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-medium transition-all cursor-pointer ${
                     activeTab === "filters"
@@ -496,6 +525,7 @@ export default function AdminDashboard({ onExitToClient }) {
                   onClick={() => {
                     setActiveTab("settings");
                     setSelectedDomainDrillDown(null);
+                    setIsMobileSidebarOpen(false);
                   }}
                   className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-medium transition-all cursor-pointer ${
                     activeTab === "settings"
@@ -515,7 +545,10 @@ export default function AdminDashboard({ onExitToClient }) {
         {/* Bottom Actions */}
         <div className="p-4 border-t border-pink-100 space-y-2">
           <button
-            onClick={onExitToClient}
+            onClick={() => {
+              setIsMobileSidebarOpen(false);
+              onExitToClient();
+            }}
             className="w-full py-2 px-3 bg-pink-50 hover:bg-pink-100 text-pink-800 rounded-xl text-xs font-medium flex items-center justify-center gap-2 transition-colors cursor-pointer"
           >
             <ExternalLink className="w-3.5 h-3.5" />
@@ -524,6 +557,7 @@ export default function AdminDashboard({ onExitToClient }) {
 
           <button
             onClick={() => {
+              setIsMobileSidebarOpen(false);
               adminLogout();
               window.location.reload();
             }}
@@ -538,29 +572,42 @@ export default function AdminDashboard({ onExitToClient }) {
       {/* ===================== MAIN CONTENT AREA ===================== */}
       <main className="flex-1 flex flex-col min-w-0 overflow-y-auto">
         
-        {/* Top bar with search & refresh */}
-        <header className="h-18 bg-white border-b border-pink-100 px-8 flex items-center justify-between gap-4 sticky top-0 z-20 shadow-xs">
-          <div className="relative w-80 max-w-full">
-            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-              <Search className="w-4 h-4" />
+        {/* Top bar with hamburger, search & refresh */}
+        <header className="h-16 sm:h-18 bg-white border-b border-pink-100 px-3 sm:px-6 lg:px-8 flex items-center justify-between gap-2 sm:gap-4 sticky top-0 z-20 shadow-xs">
+          <div className="flex items-center gap-2 sm:gap-3 flex-1 max-w-lg">
+            {/* Hamburger Button for Mobile / Tablet */}
+            <button
+              onClick={() => setIsMobileSidebarOpen(true)}
+              className="lg:hidden p-2 rounded-xl bg-pink-50 hover:bg-pink-100 text-pink-700 transition-colors cursor-pointer shrink-0"
+              title="เปิดเมนู"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+
+            {/* Search Input */}
+            <div className="relative flex-1">
+              <div className="absolute inset-y-0 left-0 pl-3 sm:pl-3.5 flex items-center pointer-events-none text-slate-400">
+                <Search className="w-4 h-4" />
+              </div>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="ค้นหา (ผู้ส่ง, ผู้รับ, หัวข้อ)..."
+                className="w-full pl-9 sm:pl-10 pr-3 sm:pr-4 py-1.5 sm:py-2 bg-[#FDF5F8] border border-pink-100 rounded-xl text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-rose-500 focus:bg-white transition-all"
+              />
             </div>
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="ค้นหา (ผู้ส่ง, ผู้รับ, หัวข้อ)..."
-              className="w-full pl-10 pr-4 py-2 bg-[#FDF5F8] border border-pink-100 rounded-xl text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-rose-500 focus:bg-white transition-all"
-            />
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
             <button
               onClick={loadData}
               disabled={isLoading}
-              className="px-3.5 py-2 bg-pink-50 hover:bg-pink-100 text-pink-700 rounded-xl text-xs font-medium flex items-center gap-2 transition-colors disabled:opacity-50 cursor-pointer"
+              className="px-2.5 sm:px-3.5 py-1.5 sm:py-2 bg-pink-50 hover:bg-pink-100 text-pink-700 rounded-xl text-xs font-medium flex items-center gap-1.5 sm:gap-2 transition-colors disabled:opacity-50 cursor-pointer"
+              title="รีเฟรชข้อมูล"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? "animate-spin text-rose-600" : ""}`} />
-              <span>รีเฟรช</span>
+              <span className="hidden sm:inline">รีเฟรช</span>
             </button>
 
             {activeTab === "mailboxes" && selectedDomainDrillDown && (
@@ -569,45 +616,45 @@ export default function AdminDashboard({ onExitToClient }) {
                   setTargetCreateDomain(selectedDomainDrillDown);
                   setIsCreateModalOpen(true);
                 }}
-                className="px-4 py-2 bg-gradient-to-r from-rose-500 to-pink-600 hover:from-rose-600 hover:to-pink-700 text-white rounded-xl text-xs font-semibold flex items-center gap-2 shadow-xs transition-colors cursor-pointer"
+                className="px-3 sm:px-4 py-1.5 sm:py-2 bg-gradient-to-r from-rose-500 to-pink-600 hover:from-rose-600 hover:to-pink-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 sm:gap-2 shadow-xs transition-colors cursor-pointer"
               >
                 <Plus className="w-4 h-4" />
-                <span>สร้างเมลใหม่</span>
+                <span className="hidden sm:inline">สร้างเมลใหม่</span>
               </button>
             )}
           </div>
         </header>
 
-        <div className="p-8 max-w-7xl w-full mx-auto flex-1">
+        <div className="p-3 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto flex-1">
 
           {/* ================= VIEW 1: OVERVIEW ================= */}
           {activeTab === "overview" && (
             <div className="space-y-8">
               
               {/* Stats Cards */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="bg-white p-5 rounded-2xl border border-pink-100 shadow-xs">
-                  <span className="text-xs font-medium text-slate-400 block mb-1">อีเมลทั้งหมดในระบบ</span>
-                  <span className="text-2xl font-bold text-slate-900">{stats.totalEmails}</span>
-                  <span className="text-[11px] text-emerald-600 font-medium block mt-1">วันนี้เข้า {stats.emailsToday} ฉบับ</span>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+                <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-pink-100 shadow-xs">
+                  <span className="text-[11px] sm:text-xs font-medium text-slate-400 block mb-1">อีเมลทั้งหมดในระบบ</span>
+                  <span className="text-xl sm:text-2xl font-bold text-slate-900">{stats.totalEmails}</span>
+                  <span className="text-[10px] sm:text-[11px] text-emerald-600 font-medium block mt-1">วันนี้เข้า {stats.emailsToday} ฉบับ</span>
                 </div>
 
-                <div className="bg-white p-5 rounded-2xl border border-pink-100 shadow-xs">
-                  <span className="text-xs font-medium text-slate-400 block mb-1">กล่องข้อความทั้งหมด</span>
-                  <span className="text-2xl font-bold text-slate-900">{stats.totalMailboxes}</span>
-                  <span className="text-[11px] text-pink-600 font-medium block mt-1">พร้อมใช้งาน 100%</span>
+                <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-pink-100 shadow-xs">
+                  <span className="text-[11px] sm:text-xs font-medium text-slate-400 block mb-1">กล่องข้อความทั้งหมด</span>
+                  <span className="text-xl sm:text-2xl font-bold text-slate-900">{stats.totalMailboxes}</span>
+                  <span className="text-[10px] sm:text-[11px] text-pink-600 font-medium block mt-1">พร้อมใช้งาน 100%</span>
                 </div>
 
-                <div className="bg-white p-5 rounded-2xl border border-pink-100 shadow-xs">
-                  <span className="text-xs font-medium text-slate-400 block mb-1">รหัส OTP ที่สกัดได้</span>
-                  <span className="text-2xl font-bold text-rose-600">{stats.totalOtps}</span>
-                  <span className="text-[11px] text-slate-400 block mt-1">ตรวจจับตัวเลขอัตโนมัติ</span>
+                <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-pink-100 shadow-xs">
+                  <span className="text-[11px] sm:text-xs font-medium text-slate-400 block mb-1">รหัส OTP ที่สกัดได้</span>
+                  <span className="text-xl sm:text-2xl font-bold text-rose-600">{stats.totalOtps}</span>
+                  <span className="text-[10px] sm:text-[11px] text-slate-400 block mt-1">ตรวจจับตัวเลขอัตโนมัติ</span>
                 </div>
 
-                <div className="bg-white p-5 rounded-2xl border border-pink-100 shadow-xs">
-                  <span className="text-xs font-medium text-slate-400 block mb-1">โดเมนที่เชื่อมต่อ</span>
-                  <span className="text-2xl font-bold text-slate-900">{masterDomains.length}</span>
-                  <span className="text-[11px] text-emerald-600 font-medium block mt-1">เปิดใช้งานแล้ว</span>
+                <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-pink-100 shadow-xs">
+                  <span className="text-[11px] sm:text-xs font-medium text-slate-400 block mb-1">โดเมนที่เชื่อมต่อ</span>
+                  <span className="text-xl sm:text-2xl font-bold text-slate-900">{masterDomains.length}</span>
+                  <span className="text-[10px] sm:text-[11px] text-emerald-600 font-medium block mt-1">เปิดใช้งานแล้ว</span>
                 </div>
               </div>
 
@@ -690,8 +737,8 @@ export default function AdminDashboard({ onExitToClient }) {
 
               {/* Table */}
               <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-[#2E3192] text-white font-semibold">
+                <table className="w-full min-w-[720px] text-left text-xs">
+                  <thead className="bg-[#2E3192] text-white font-semibold whitespace-nowrap">
                     <tr>
                       <th className="py-3.5 px-4 w-10 text-center">
                         <button
@@ -713,7 +760,7 @@ export default function AdminDashboard({ onExitToClient }) {
                       <th className="py-3.5 px-4 text-center">จัดการ</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100">
+                  <tbody className="divide-y divide-slate-100 whitespace-nowrap">
                     {paginatedEmails.map((item) => {
                       const isSelected = selectedEmailIds.includes(item.id);
                       return (
@@ -845,50 +892,50 @@ export default function AdminDashboard({ onExitToClient }) {
                   
                   {/* Table (Image 2) */}
                   <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-[#2E3192] text-white font-semibold">
+                    <table className="w-full min-w-[580px] text-left text-xs">
+                      <thead className="bg-[#2E3192] text-white font-semibold whitespace-nowrap">
                         <tr>
-                          <th className="py-3.5 px-6">โดเมน</th>
-                          <th className="py-3.5 px-6">ที่มา</th>
-                          <th className="py-3.5 px-6 text-center">สถานะ</th>
-                          <th className="py-3.5 px-6 text-center">จำนวน</th>
-                          <th className="py-3.5 px-6 text-center">จัดการ</th>
+                          <th className="py-3.5 px-4 sm:px-6">โดเมน</th>
+                          <th className="py-3.5 px-4 sm:px-6">ที่มา</th>
+                          <th className="py-3.5 px-4 sm:px-6 text-center">สถานะ</th>
+                          <th className="py-3.5 px-4 sm:px-6 text-center">จำนวน</th>
+                          <th className="py-3.5 px-4 sm:px-6 text-center">จัดการ</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-100">
+                      <tbody className="divide-y divide-slate-100 whitespace-nowrap">
                         {masterDomains.map((dom) => (
                           <tr key={dom.name} className="hover:bg-slate-50 transition-colors">
                             
                             {/* โดเมน */}
-                            <td className="py-4 px-6 font-bold text-slate-900 text-sm">
+                            <td className="py-4 px-4 sm:px-6 font-bold text-slate-900 text-sm whitespace-nowrap">
                               {dom.name}
                             </td>
 
                             {/* ที่มา */}
-                            <td className="py-4 px-6 text-slate-600 font-medium">
+                            <td className="py-4 px-4 sm:px-6 text-slate-600 font-medium whitespace-nowrap">
                               {dom.source}
                             </td>
 
                             {/* สถานะ */}
-                            <td className="py-4 px-6 text-center">
-                              <span className="px-2.5 py-0.5 rounded-md bg-emerald-600 text-white font-bold text-[11px]">
+                            <td className="py-4 px-4 sm:px-6 text-center whitespace-nowrap">
+                              <span className="inline-block whitespace-nowrap px-3 py-1 rounded-md bg-emerald-600 text-white font-bold text-[11px] shadow-xs">
                                 {dom.status}
                               </span>
                             </td>
 
                             {/* จำนวน */}
-                            <td className="py-4 px-6 text-center font-bold text-slate-800 text-sm">
+                            <td className="py-4 px-4 sm:px-6 text-center font-bold text-slate-800 text-sm whitespace-nowrap">
                               {dom.count}
                             </td>
 
                             {/* จัดการ (ส้ม บัญชีเมล / เขียวมิ้นท์ อีเมล) */}
-                            <td className="py-4 px-6 text-center whitespace-nowrap">
+                            <td className="py-4 px-4 sm:px-6 text-center whitespace-nowrap">
                               <div className="flex items-center justify-center gap-2">
                                 
                                 {/* ปุ่ม บัญชีเมล (สีส้ม) */}
                                 <button
                                   onClick={() => setSelectedDomainDrillDown(dom.name)}
-                                  className="px-3 py-1.5 rounded-lg bg-[#F59E0B] hover:bg-[#D97706] text-white font-bold text-xs flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
+                                  className="px-3 py-1.5 rounded-lg bg-[#F59E0B] hover:bg-[#D97706] text-white font-bold text-xs flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer whitespace-nowrap"
                                 >
                                   <Eye className="w-3.5 h-3.5" />
                                   <span>บัญชีเมล</span>
@@ -900,7 +947,7 @@ export default function AdminDashboard({ onExitToClient }) {
                                     setSearchQuery(dom.name);
                                     setActiveTab("inbox");
                                   }}
-                                  className="px-3 py-1.5 rounded-lg bg-[#10B981] hover:bg-[#059669] text-white font-bold text-xs flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
+                                  className="px-3 py-1.5 rounded-lg bg-[#10B981] hover:bg-[#059669] text-white font-bold text-xs flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer whitespace-nowrap"
                                 >
                                   <Mail className="w-3.5 h-3.5" />
                                   <span>อีเมล</span>
@@ -956,17 +1003,17 @@ export default function AdminDashboard({ onExitToClient }) {
 
                   {/* Table of mailboxes */}
                   <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-[#2E3192] text-white font-semibold">
+                    <table className="w-full min-w-[620px] text-left text-xs">
+                      <thead className="bg-[#2E3192] text-white font-semibold whitespace-nowrap">
                         <tr>
-                          <th className="py-3.5 px-5">ที่อยู่อีเมล</th>
-                          <th className="py-3.5 px-5">ระบบล็อค PIN</th>
-                          <th className="py-3.5 px-5">บันทึกช่วยจำ</th>
-                          <th className="py-3.5 px-5">วันที่สร้าง</th>
-                          <th className="py-3.5 px-5 text-center">จัดการ</th>
+                          <th className="py-3.5 px-4 sm:px-5">ที่อยู่อีเมล</th>
+                          <th className="py-3.5 px-4 sm:px-5">ระบบล็อค PIN</th>
+                          <th className="py-3.5 px-4 sm:px-5">บันทึกช่วยจำ</th>
+                          <th className="py-3.5 px-4 sm:px-5">วันที่สร้าง</th>
+                          <th className="py-3.5 px-4 sm:px-5 text-center">จัดการ</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-100">
+                      <tbody className="divide-y divide-slate-100 whitespace-nowrap">
                         {drillDownMailboxes.map((mb) => (
                           <tr key={mb.id} className="hover:bg-slate-50 transition-colors">
                             <td className="py-4 px-5 font-mono text-rose-700 font-bold text-sm">
