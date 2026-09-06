@@ -1,11 +1,24 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { ShieldCheck } from 'lucide-react';
 import OtpMailboxPage from './components/OtpMailboxPage';
 import Toast from './components/Toast';
+import AdminDashboard from './components/AdminDashboard';
+import AdminLogin from './components/AdminLogin';
+import { checkAdminSession } from './services/adminService';
 
 export default function App() {
   const [toast, setToast] = useState({ isVisible: false, message: '', icon: '✨' });
 
-  // Read initial email from URL query if present (e.g. /?email=...)
+  // Read initial email or admin route from URL query if present
+  const checkInitialAdmin = () => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('admin') === 'true' || window.location.pathname.startsWith('/admin');
+    } catch {
+      return false;
+    }
+  };
+
   const getInitialEmailFromUrl = () => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -16,6 +29,23 @@ export default function App() {
   };
 
   const [initialEmail] = useState(getInitialEmailFromUrl);
+  const [isAdminMode, setIsAdminMode] = useState(checkInitialAdmin);
+  const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(checkAdminSession);
+
+  // Sync admin mode to URL query
+  const handleOpenAdmin = () => {
+    setIsAdminMode(true);
+    const url = new URL(window.location.href);
+    url.searchParams.set('admin', 'true');
+    window.history.pushState({}, '', url);
+  };
+
+  const handleExitAdmin = () => {
+    setIsAdminMode(false);
+    const url = new URL(window.location.href);
+    url.searchParams.delete('admin');
+    window.history.pushState({}, '', url);
+  };
 
   const showToast = (message, icon = '✨') => {
     setToast({ isVisible: true, message, icon });
@@ -24,6 +54,20 @@ export default function App() {
     }, 3500);
   };
 
+  // If in Admin Mode
+  if (isAdminMode) {
+    if (!isAdminLoggedIn) {
+      return (
+        <AdminLogin
+          onLoginSuccess={() => setIsAdminLoggedIn(true)}
+          onCancel={handleExitAdmin}
+        />
+      );
+    }
+    return <AdminDashboard onExitToClient={handleExitAdmin} />;
+  }
+
+  // Client OTP Search Mode
   return (
     <div className="min-h-screen bg-[#FDF5F8] flex flex-col justify-between font-['Prompt'] text-[#374151] selection:bg-pink-200 selection:text-pink-900">
       
@@ -48,6 +92,17 @@ export default function App() {
               <p className="text-[10px] sm:text-[11px] text-gray-500 font-normal">ระบบดึงรหัสยืนยัน OTP อัตโนมัติ 24 ชม.</p>
             </div>
           </div>
+
+          {/* Admin Switch Button */}
+          <button
+            onClick={handleOpenAdmin}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition-all shadow-xs hover:shadow-sm cursor-pointer"
+            title="เข้าสู่ระบบจัดการแอดมิน"
+          >
+            <ShieldCheck className="w-4 h-4 text-indigo-600" />
+            <span className="hidden sm:inline">แดชบอร์ดแอดมิน</span>
+            <span className="sm:hidden">แอดมิน</span>
+          </button>
 
         </div>
       </header>

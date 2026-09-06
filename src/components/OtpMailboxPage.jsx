@@ -15,12 +15,15 @@ import {
   Unlock,
   X
 } from 'lucide-react';
+import { getMailboxInfo, verifyMailboxPin, fetchEmails, subscribeToNewEmails } from '../services/otpService';
+import { supabase, isSupabaseConfigured } from '../services/supabaseClient';
 
 /**
  * Intelligent OTP Extractor from mail subject and body text
  */
 function extractOtpFromMail(mail) {
   if (!mail) return null;
+  if (mail.otpCode) return mail.otpCode;
   const subject = mail.subject || '';
   const text = mail.text || mail.searchText || mail.snippet || '';
   const fullContent = `${subject} ${text}`.replace(/[\u00a0\u200b\u200c\u200d]/g, ' ');
@@ -166,14 +169,66 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
 
     let fetchedMails = null;
 
+    // Tier 0: Dedicated Supabase Database (Self-hosted OTP Platform e.g. @namenoname.store)
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const mbResult = await getMailboxInfo(clean);
+        if (mbResult.success && mbResult.exists) {
+          // Check PIN lock
+          if (mbResult.mailbox.hasPin) {
+            if (!pinToUse) {
+              setIsLoading(false);
+              setIsSubmittingPin(false);
+              setPendingEmail(clean);
+              setIsMailboxLocked(true);
+              setIsPinModalOpen(true);
+              setPinErrorMessage('');
+              setPinInput('');
+              setWarningMessage('กล่องข้อความนี้ถูกล็อคด้วย PIN กรุณาใส่รหัสเพื่อดูข้อความ');
+              return;
+            }
+
+            const pinCheck = await verifyMailboxPin(clean, pinToUse);
+            if (!pinCheck.isMatch) {
+              setIsLoading(false);
+              setIsSubmittingPin(false);
+              setPinErrorMessage('รหัส PIN ไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง');
+              return;
+            }
+          }
+
+          // Fetch emails from Supabase
+          const emailsRes = await fetchEmails(mbResult.mailbox.id);
+          if (emailsRes.success) {
+            fetchedMails = emailsRes.emails.map((m) => ({
+              id: m.id,
+              from: m.sender || 'ไม่ระบุผู้ส่ง',
+              to: clean,
+              subject: m.subject || '(ไม่มีหัวข้อ)',
+              html: m.body_html || '',
+              text: m.body_text || '',
+              otpCode: m.otp_code,
+              createdAt: m.received_at || new Date().toISOString()
+            }));
+          }
+        } else if (clean.endsWith('@namenoname.store')) {
+          // Domain is ours, but no emails yet
+          fetchedMails = [];
+        }
+      } catch (sbErr) {
+        console.warn('Supabase fetch error:', sbErr);
+      }
+    }
+
     // Tier 1: Direct Browser Call to Maily Space Public Mailbox API
     // Exact endpoint used by maily.space web application.
     // Properly enforces PIN locks (returns HTTP 403 'กรุณาใส่ PIN') and bypasses datacenter IP blocks.
-    try {
-      const [accountName, domainPart] = clean.split('@');
-      if (accountName && domainPart) {
-        const domainId = domainPart.replace(/\./g, '');
-        const pubUrl = `https://api.maily.space/mail/public/mails?accountName=${encodeURIComponent(accountName)}&domainId=${encodeURIComponent(domainId)}&size=40`;
+    if (fetchedMails === null) {
+      try {
+        const [accountName, domainPart] = clean.split('@');
+        if (accountName && domainPart) {
+          const domainId = domainPart.replace(/\./g, '');
+          const pubUrl = `https://api.maily.space/mail/public/mails?accountName=${encodeURIComponent(accountName)}&domainId=${encodeURIComponent(domainId)}&size=40`;
         const pubHeaders = {};
         if (pinToUse) {
           pubHeaders['X-Mailbox-Pin'] = pinToUse;
@@ -226,6 +281,7 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
     } catch (pubErr) {
       console.warn('Tier 1 public mailbox fetch error:', pubErr);
     }
+  }
 
     // Tier 2: Developer REST API (Fallback only if Tier 1 was not a 403 PIN challenge)
     if (!fetchedMails || fetchedMails.length === 0) {
@@ -396,8 +452,10 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
   // Fetch full email detail (HTML and full text body)
   const fetchMailDetail = async (mailId, targetEmail = activeEmail, pin = activePin) => {
     try {
-      setLoadingDetailId(mailId);
       const clean = (targetEmail || '').trim().toLowerCase();
+      if (clean.endsWith('@namenoname.store')) return; // Supabase already loads full text & html!
+
+      setLoadingDetailId(mailId);
       const [accountName, domainPart] = clean.split('@');
       if (!accountName || !domainPart) return;
       const domainId = domainPart.replace(/\./g, '');
