@@ -60,6 +60,21 @@ function extractOtpFromMail(mail) {
   return null;
 }
 
+/**
+ * Clean markdown and URLs from email text for readable display
+ */
+function cleanEmailText(text) {
+  if (!text) return '';
+  return text
+    // Remove standalone bracketed image markdown URLs like [https://...jpg]
+    .replace(/\[https?:\/\/[^\s\]]+\.(?:jpg|jpeg|png|gif|webp|svg)\]/gi, '')
+    // Normalize bracketed redundant emails e.g. [user@domain.com]
+    .replace(/\s*\[[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\]/g, '')
+    // Normalize excessive newlines
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
   const [emailInput, setEmailInput] = useState(initialEmail || '');
   const [activeEmail, setActiveEmail] = useState(initialEmail || '');
@@ -69,6 +84,7 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
   const [warningMessage, setWarningMessage] = useState('');
   const [copiedOtpId, setCopiedOtpId] = useState(null);
   const [expandedMailId, setExpandedMailId] = useState(null);
+  const [loadingDetailId, setLoadingDetailId] = useState(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [countdown, setCountdown] = useState(5);
   const [lastUpdated, setLastUpdated] = useState(null);
@@ -296,6 +312,10 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
       if (!isSilent && onShowToast) {
         onShowToast(`📬 ดึงข้อความเรียบร้อยแล้ว (${fetchedMails.length} รายการ)`, '✨');
       }
+      // Pre-fetch details for the latest mail in the background
+      if (fetchedMails[0]?.id) {
+        fetchMailDetail(fetchedMails[0].id, clean, pinToUse);
+      }
     } else {
       setMails([]);
       setActiveEmail(clean);
@@ -373,9 +393,53 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
     }, 2500);
   };
 
-  // Toggle full email preview
-  const toggleExpand = (id) => {
-    setExpandedMailId((prev) => (prev === id ? null : id));
+  // Fetch full email detail (HTML and full text body)
+  const fetchMailDetail = async (mailId, targetEmail = activeEmail, pin = activePin) => {
+    try {
+      setLoadingDetailId(mailId);
+      const clean = (targetEmail || '').trim().toLowerCase();
+      const [accountName, domainPart] = clean.split('@');
+      if (!accountName || !domainPart) return;
+      const domainId = domainPart.replace(/\./g, '');
+      const detailUrl = `https://api.maily.space/mail/public/mails/${mailId}?accountName=${encodeURIComponent(accountName)}&domainId=${encodeURIComponent(domainId)}`;
+      const headers = {};
+      if (pin) headers['X-Mailbox-Pin'] = pin;
+
+      const res = await fetch(detailUrl, { headers });
+      const json = await res.json().catch(() => null);
+      if (res.ok && json?.data) {
+        const full = json.data;
+        setMails((prevMails) =>
+          prevMails.map((m) =>
+            m.id === mailId
+              ? {
+                  ...m,
+                  html: full.html || m.html,
+                  text: full.text || m.text,
+                  snippet: full.snippet || m.snippet
+                }
+              : m
+          )
+        );
+      }
+    } catch (e) {
+      console.warn('Failed to fetch mail detail:', e);
+    } finally {
+      setLoadingDetailId(null);
+    }
+  };
+
+  // Toggle full email preview with auto-fetch
+  const toggleExpand = async (id) => {
+    if (expandedMailId === id) {
+      setExpandedMailId(null);
+    } else {
+      setExpandedMailId(id);
+      const mail = mails.find((m) => m.id === id);
+      if (mail && (!mail.html || !mail.text || mail.text.length <= 150)) {
+        await fetchMailDetail(id);
+      }
+    }
   };
 
   return (
@@ -766,18 +830,31 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
 
                       {/* Expanded View: HTML or Text preview */}
                       {isExpanded && (
-                        <div className="mt-3 p-4 rounded-2xl bg-gray-50 border border-gray-200 text-xs text-gray-700 space-y-3">
-                          {mail.html ? (
-                            <div className="w-full overflow-x-auto bg-white p-3 rounded-xl border border-gray-200 max-h-96 overflow-y-auto">
-                              <div
-                                dangerouslySetInnerHTML={{ __html: mail.html }}
-                                className="prose prose-xs max-w-none"
-                              />
+                        <div className="mt-3 p-4 rounded-2xl bg-gray-50 border border-gray-200 text-xs text-gray-700 space-y-3 animate-in fade-in">
+                          {loadingDetailId === mail.id && !mail.html && (!mail.text || mail.text.length <= 150) ? (
+                            <div className="py-6 flex flex-col items-center justify-center gap-2 text-gray-400">
+                              <RefreshCw className="w-5 h-5 animate-spin text-rose-500" />
+                              <span className="text-xs font-medium">กำลังโหลดเนื้อหาอีเมลฉบับเต็ม...</span>
+                            </div>
+                          ) : mail.html ? (
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between text-[11px] text-gray-400 pb-1 border-b border-gray-200">
+                                <span>เนื้อหาอีเมลฉบับเต็ม (HTML Preview)</span>
+                                <span className="text-[10px] bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded font-medium">ฉบับเต็ม</span>
+                              </div>
+                              <div className="w-full overflow-x-auto bg-white p-4 rounded-xl border border-gray-200 max-h-[500px] overflow-y-auto">
+                                <div
+                                  dangerouslySetInnerHTML={{ __html: mail.html }}
+                                  className="prose prose-xs max-w-none text-gray-800"
+                                />
+                              </div>
                             </div>
                           ) : (
-                            <pre className="whitespace-pre-wrap font-sans text-xs bg-white p-3 rounded-xl border border-gray-200 max-h-80 overflow-y-auto">
-                              {mail.text || mail.searchText || mail.snippet || '(ไม่มีเนื้อหาข้อความ)'}
-                            </pre>
+                            <div className="space-y-2">
+                              <pre className="whitespace-pre-wrap font-sans text-xs bg-white p-4 rounded-xl border border-gray-200 max-h-[500px] overflow-y-auto leading-relaxed text-gray-800">
+                                {cleanEmailText(mail.text || mail.searchText || mail.snippet) || '(ไม่มีเนื้อหาข้อความ)'}
+                              </pre>
+                            </div>
                           )}
                         </div>
                       )}
