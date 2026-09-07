@@ -3,7 +3,7 @@ import OtpMailboxPage from './components/OtpMailboxPage';
 import Toast from './components/Toast';
 import AdminDashboard from './components/AdminDashboard';
 import AdminLogin from './components/AdminLogin';
-import { checkAdminSession } from './services/adminService';
+import { checkAdminSession, touchAdminSession, adminLogout } from './services/adminService';
 
 export default function App() {
   const [toast, setToast] = useState({ isVisible: false, message: '', icon: '✨' });
@@ -31,8 +31,35 @@ export default function App() {
   const [isAdminMode, setIsAdminMode] = useState(checkInitialAdmin);
   const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(checkAdminSession);
 
+  // Auto Inactivity Monitor for Maximum Admin Security (15 min auto-logout)
+  useEffect(() => {
+    if (!isAdminMode || !isAdminLoggedIn) return;
+
+    const handleUserActivity = () => {
+      touchAdminSession();
+    };
+
+    const events = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'];
+    events.forEach((ev) => window.addEventListener(ev, handleUserActivity, { passive: true }));
+
+    // Check expiration every 20 seconds
+    const interval = setInterval(() => {
+      if (!checkAdminSession()) {
+        adminLogout();
+        setIsAdminLoggedIn(false);
+        showToast('เซสชันแอดมินหมดอายุเนื่องจากไม่มีการใช้งานเกิน 15 นาที เพื่อความปลอดภัยสูงสุด', '🔒');
+      }
+    }, 20000);
+
+    return () => {
+      events.forEach((ev) => window.removeEventListener(ev, handleUserActivity));
+      clearInterval(interval);
+    };
+  }, [isAdminMode, isAdminLoggedIn]);
+
   // Sync admin mode to URL query
   const handleOpenAdmin = () => {
+    setIsAdminLoggedIn(checkAdminSession());
     setIsAdminMode(true);
     const url = new URL(window.location.href);
     url.searchParams.set('admin', 'true');
@@ -40,17 +67,18 @@ export default function App() {
   };
 
   const handleExitAdmin = () => {
+    adminLogout();
+    setIsAdminLoggedIn(false);
     setIsAdminMode(false);
-    const url = new URL(window.location.href);
-    url.searchParams.delete('admin');
-    window.history.pushState({}, '', url);
+    // Securely clear query parameter from browser address bar and history
+    window.history.replaceState({}, '', window.location.pathname.startsWith('/admin') ? '/' : window.location.pathname);
   };
 
   const showToast = (message, icon = '✨') => {
     setToast({ isVisible: true, message, icon });
     setTimeout(() => {
       setToast((prev) => ({ ...prev, isVisible: false }));
-    }, 3500);
+    }, 4000);
   };
 
   // If in Admin Mode
@@ -58,7 +86,10 @@ export default function App() {
     if (!isAdminLoggedIn) {
       return (
         <AdminLogin
-          onLoginSuccess={() => setIsAdminLoggedIn(true)}
+          onLoginSuccess={() => {
+            setIsAdminLoggedIn(true);
+            showToast('เข้าสู่ระบบแอดมินสำเร็จ (ความปลอดภัยระดับสูงสุด)', '🛡️');
+          }}
           onCancel={handleExitAdmin}
         />
       );

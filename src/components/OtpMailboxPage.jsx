@@ -200,7 +200,7 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
           // Fetch emails from Supabase
           const emailsRes = await fetchEmails(mbResult.mailbox.id);
           if (emailsRes.success) {
-            fetchedMails = emailsRes.emails.map((m) => ({
+            let allMails = emailsRes.emails.map((m) => ({
               id: m.id,
               from: m.sender || 'ไม่ระบุผู้ส่ง',
               to: clean,
@@ -210,9 +210,36 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
               otpCode: m.otp_code,
               createdAt: m.received_at || new Date().toISOString()
             }));
+
+            // Apply filter rule if mailbox has one configured (Images 4 & 5 rule)
+            if (mbResult.mailbox.note && mbResult.mailbox.note.trim() && mbResult.mailbox.note !== "ไม่ใช้ตัวกรอง") {
+              const rule = mbResult.mailbox.note.trim();
+              const filtered = allMails.filter((m) => {
+                const f = rule.toLowerCase();
+                const from = (m.from || '').toLowerCase();
+                const subj = (m.subject || '').toLowerCase();
+                const body = (m.text || '').toLowerCase();
+                if (f.includes('alibaba')) return from.includes('alibaba') || from.includes('aliexpress') || from.includes('1688') || subj.includes('alibaba') || subj.includes('aliexpress');
+                if (f.includes('chatgpt') || f.includes('openai')) return from.includes('openai') || subj.includes('chatgpt') || subj.includes('openai');
+                if (f.includes('disney')) return from.includes('disney') || subj.includes('disney');
+                if (f.includes('netflix')) return from.includes('netflix') || subj.includes('netflix');
+                if (f.includes('google')) return from.includes('google') || subj.includes('google');
+                if (f.includes('monomax')) return from.includes('monomax') || subj.includes('monomax');
+                if (f.includes('roblox')) return from.includes('roblox') || subj.includes('roblox');
+                if (f.includes('spotify')) return from.includes('spotify') || subj.includes('spotify');
+                return from.includes(f) || subj.includes(f) || body.includes(f);
+              });
+
+              if (filtered.length === 0 && allMails.length > 0) {
+                setWarningMessage(`บัญชีนี้กำหนดตัวกรอง: "${rule}" (ไม่พบอีเมลที่ตรงกับตัวกรองนี้)`);
+              }
+              fetchedMails = filtered;
+            } else {
+              fetchedMails = allMails;
+            }
           }
-        } else if (clean.endsWith('@namenoname.store')) {
-          // Domain is ours, but no emails yet
+        } else {
+          // Domain is ours or registered in Supabase, but mailbox has no records yet
           fetchedMails = [];
         }
       } catch (sbErr) {

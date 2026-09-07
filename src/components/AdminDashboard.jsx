@@ -42,6 +42,10 @@ import {
   deleteMailbox,
   deleteBatchMailboxes,
   fetchDomains,
+  createDomain,
+  deleteDomain,
+  updateMailboxFilter,
+  updateBatchMailboxesFilter,
   adminLogout,
   updateAdminPassword,
   fixThaiMojibake
@@ -86,6 +90,7 @@ export default function AdminDashboard({ onExitToClient }) {
   const [pinMode, setPinMode] = useState("none"); // "none" | "random" | "custom"
   const [customPinVal, setCustomPinVal] = useState("");
   const [useFilterCheckbox, setUseFilterCheckbox] = useState(false);
+  const [selectedCreateFilter, setSelectedCreateFilter] = useState("Alibaba Login OTP");
   const [singlePrefix, setSinglePrefix] = useState("");
   const [batchCount, setBatchCount] = useState(10);
   const [isCreatingSingle, setIsCreatingSingle] = useState(false);
@@ -95,6 +100,21 @@ export default function AdminDashboard({ onExitToClient }) {
   const [isResultModalOpen, setIsResultModalOpen] = useState(false);
   const [createdResultList, setCreatedResultList] = useState([]);
   const [copiedResultAll, setCopiedResultAll] = useState(false);
+
+  // Mailbox Filter Modal (Image 4 & 5 replica)
+  const [filterModal, setFilterModal] = useState({
+    isOpen: false,
+    mailboxIds: [],
+    selectedFilter: "",
+    title: "กำหนดตัวกรอง 1 บัญชี",
+    subtitle: "ตัวกรองนี้จะทำให้ผู้ใช้ภายนอกเห็นเฉพาะอีเมลที่ตรงกับตัวกรองเท่านั้น"
+  });
+
+  // Connect Domain Modal
+  const [isAddDomainModalOpen, setIsAddDomainModalOpen] = useState(false);
+  const [newDomainName, setNewDomainName] = useState("");
+  const [newDomainSource, setNewDomainSource] = useState("ผู้ใช้");
+  const [isAddingDomain, setIsAddingDomain] = useState(false);
 
   // Mailbox multi-select & Drill-down search/pagination (Image 2 & 3)
   const [selectedMailboxIds, setSelectedMailboxIds] = useState([]);
@@ -300,7 +320,7 @@ export default function AdminDashboard({ onExitToClient }) {
     const pin = getPinForCreation();
 
     setIsCreatingSingle(true);
-    const res = await createMailbox(address, pin, useFilterCheckbox ? "ใช้ตัวกรอง OTP" : "");
+    const res = await createMailbox(address, pin, useFilterCheckbox ? selectedCreateFilter : "");
     setIsCreatingSingle(false);
 
     if (res.success) {
@@ -330,7 +350,7 @@ export default function AdminDashboard({ onExitToClient }) {
     const pin = getPinForCreation();
 
     setIsCreatingBatch(true);
-    const res = await createBatchMailboxes(addresses, pin, useFilterCheckbox ? "ใช้ตัวกรอง OTP" : "");
+    const res = await createBatchMailboxes(addresses, pin, useFilterCheckbox ? selectedCreateFilter : "");
     setIsCreatingBatch(false);
 
     if (res.success) {
@@ -343,6 +363,78 @@ export default function AdminDashboard({ onExitToClient }) {
       loadData();
     } else {
       alert("เกิดข้อผิดพลาดในการสร้างหลายบัญชี");
+    }
+  };
+
+  // Open filter modal for single mailbox (Images 4 & 5)
+  const handleOpenFilterModalForSingle = (mb) => {
+    setFilterModal({
+      isOpen: true,
+      mailboxIds: [mb.id],
+      selectedFilter: mb.note || "",
+      title: "กำหนดตัวกรอง 1 บัญชี",
+      subtitle: "ตัวกรองนี้จะทำให้ผู้ใช้ภายนอกเห็นเฉพาะอีเมลที่ตรงกับตัวกรองเท่านั้น"
+    });
+  };
+
+  // Open filter modal for batch mailboxes (Images 4 & 5)
+  const handleOpenFilterModalForBatch = () => {
+    if (selectedMailboxIds.length === 0) {
+      alert("กรุณาเลือกบัญชีเมลที่ต้องการกำหนดตัวกรองด้วยการติ๊กถูกหน้าช่องก่อนครับ");
+      return;
+    }
+    setFilterModal({
+      isOpen: true,
+      mailboxIds: [...selectedMailboxIds],
+      selectedFilter: "",
+      title: `กำหนดตัวกรอง ${selectedMailboxIds.length} บัญชี`,
+      subtitle: "ตัวกรองนี้จะทำให้ผู้ใช้ภายนอกเห็นเฉพาะอีเมลที่ตรงกับตัวกรองเท่านั้น"
+    });
+  };
+
+  // Save filter selection (Images 4 & 5)
+  const handleSaveFilterModal = async () => {
+    if (!filterModal.mailboxIds || filterModal.mailboxIds.length === 0) return;
+    setIsLoading(true);
+    const res = await updateBatchMailboxesFilter(filterModal.mailboxIds, filterModal.selectedFilter);
+    setIsLoading(false);
+    if (res.success) {
+      setFilterModal((prev) => ({ ...prev, isOpen: false }));
+      showLocalToast("บันทึกตัวกรองเรียบร้อยแล้ว");
+      loadData();
+    } else {
+      alert("ไม่สามารถบันทึกตัวกรองได้: " + (res.error || ""));
+    }
+  };
+
+  // Handle Connect Domain
+  const handleConnectDomain = async (e) => {
+    e.preventDefault();
+    if (!newDomainName.trim()) return;
+    setIsAddingDomain(true);
+    const res = await createDomain(newDomainName, newDomainSource);
+    setIsAddingDomain(false);
+    if (res.success) {
+      setIsAddDomainModalOpen(false);
+      setNewDomainName("");
+      showLocalToast("เชื่อมต่อโดเมนสำเร็จ พร้อมใช้งานทันที 100%");
+      loadData();
+    } else {
+      alert("ไม่สามารถเชื่อมต่อโดเมนได้: " + (res.error || ""));
+    }
+  };
+
+  // Handle Delete Domain
+  const handleDeleteDomain = async (domainId, domainName) => {
+    if (!window.confirm(`คุณต้องการลบโดเมน ${domainName} ออกจากระบบใช่หรือไม่?`)) return;
+    setIsLoading(true);
+    const res = await deleteDomain(domainId);
+    setIsLoading(false);
+    if (res.success) {
+      showLocalToast(`ลบโดเมน ${domainName} เรียบร้อยแล้ว`);
+      loadData();
+    } else {
+      alert("ไม่สามารถลบโดเมนได้: " + (res.error || ""));
     }
   };
 
@@ -454,9 +546,10 @@ export default function AdminDashboard({ onExitToClient }) {
     const dName = dom.name || (typeof dom === "string" ? dom : "namenoname.store");
     const count = mailboxes.filter((m) => m.address && m.address.toLowerCase().endsWith(`@${dName.toLowerCase()}`)).length;
     return {
+      id: dom.id,
       name: dName,
-      source: "ผู้ใช้",
-      status: "เปิดใช้งาน",
+      source: dom.name?.includes("lico.moe") ? "ระบบ" : "ผู้ใช้",
+      status: dom.is_active !== false ? "เปิดใช้งาน" : "ปิดใช้งาน",
       count: count
     };
   });
@@ -980,6 +1073,21 @@ export default function AdminDashboard({ onExitToClient }) {
               {!selectedDomainDrillDown ? (
                 <div className="bg-white rounded-2xl border border-pink-100 shadow-xs overflow-hidden">
                   
+                  {/* Domains Table Header & Actions */}
+                  <div className="px-6 py-4 border-b border-pink-100 flex flex-wrap items-center justify-between gap-4">
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900">รายชื่อโดเมนทั้งหมด</h3>
+                      <p className="text-xs text-slate-400 mt-0.5">จัดการและเชื่อมต่อโดเมนเพื่อเปิดใช้งานระบบรับ OTP อัตโนมัติ</p>
+                    </div>
+                    <button
+                      onClick={() => setIsAddDomainModalOpen(true)}
+                      className="px-4 py-2 bg-[#2E3192] hover:bg-indigo-900 text-white rounded-xl text-xs font-semibold flex items-center gap-2 shadow-xs transition-colors cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>เชื่อมต่อโดเมนใหม่ +</span>
+                    </button>
+                  </div>
+
                   {/* Table (Image 2) */}
                   <div className="overflow-x-auto">
                     <table className="w-full min-w-[580px] text-left text-xs">
@@ -1018,7 +1126,7 @@ export default function AdminDashboard({ onExitToClient }) {
                               {dom.count}
                             </td>
 
-                            {/* จัดการ (ส้ม บัญชีเมล / เขียวมิ้นท์ อีเมล) */}
+                            {/* จัดการ (ส้ม บัญชีเมล / เขียวมิ้นท์ อีเมล / ถังขยะ ลบ) */}
                             <td className="py-4 px-4 sm:px-6 text-center whitespace-nowrap">
                               <div className="flex items-center justify-center gap-2">
                                 
@@ -1042,6 +1150,17 @@ export default function AdminDashboard({ onExitToClient }) {
                                   <Mail className="w-3.5 h-3.5" />
                                   <span>อีเมล</span>
                                 </button>
+
+                                {/* ปุ่ม ลบโดเมน */}
+                                {dom.id && dom.name !== "namenoname.store" && (
+                                  <button
+                                    onClick={() => handleDeleteDomain(dom.id, dom.name)}
+                                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                                    title={`ลบโดเมน ${dom.name}`}
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
 
                               </div>
                             </td>
@@ -1120,10 +1239,10 @@ export default function AdminDashboard({ onExitToClient }) {
 
                           {/* จัดการตัวกรอง */}
                           <button
-                            onClick={() => setActiveTab("filters")}
-                            className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+                            onClick={handleOpenFilterModalForBatch}
+                            className="px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
                           >
-                            <Filter className="w-3.5 h-3.5 text-slate-500" />
+                            <Filter className="w-3.5 h-3.5" />
                             <span>จัดการตัวกรอง</span>
                           </button>
 
@@ -1199,7 +1318,14 @@ export default function AdminDashboard({ onExitToClient }) {
 
                                   {/* บัญชีเมล */}
                                   <td className="py-3.5 px-4 font-mono font-medium text-slate-800 text-xs whitespace-nowrap">
-                                    {mb.address}
+                                    <div className="flex items-center gap-2">
+                                      <span>{mb.address}</span>
+                                      {mb.note && (
+                                        <span className="px-2 py-0.5 rounded-md bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-sans font-semibold">
+                                          {mb.note}
+                                        </span>
+                                      )}
+                                    </div>
                                   </td>
 
                                   {/* จัดการ (Image 3 Buttons: PIN, คัดลอก, อีเมล, ตัวกรอง, ลบบัญชี) */}
@@ -1255,11 +1381,11 @@ export default function AdminDashboard({ onExitToClient }) {
                                         <span>อีเมล</span>
                                       </button>
 
-                                      {/* ปุ่ม ตัวกรอง */}
+                                      {/* ปุ่ม ตัวกรอง (Images 4 & 5 Modal) */}
                                       <button
-                                        onClick={() => setActiveTab("filters")}
+                                        onClick={() => handleOpenFilterModalForSingle(mb)}
                                         className="px-2.5 py-1 rounded-lg bg-[#EAB308] hover:bg-[#CA8A04] text-white font-bold text-[11px] flex items-center gap-1 shadow-xs transition-colors cursor-pointer"
-                                        title="ดูและจัดการตัวกรอง"
+                                        title="กำหนดตัวกรองสำหรับบัญชีนี้"
                                       >
                                         <Filter className="w-3 h-3" />
                                         <span>ตัวกรอง</span>
@@ -1605,9 +1731,9 @@ export default function AdminDashboard({ onExitToClient }) {
               )}
             </div>
 
-            {/* Title: ใช้ตัวกรองอีเมล */}
+            {/* Title: ใช้ตัวกรองอีเมล (Image 3) */}
             <div className="mb-6">
-              <h4 className="font-bold text-base text-slate-900 mb-2.5">ใช้ตัวกรองอีเมล</h4>
+              <h4 className="font-bold text-base text-slate-900 mb-2">ใช้ตัวกรองอีเมล</h4>
               <label className="flex items-center gap-2.5 text-xs text-slate-700 cursor-pointer">
                 <input
                   type="checkbox"
@@ -1615,8 +1741,56 @@ export default function AdminDashboard({ onExitToClient }) {
                   onChange={(e) => setUseFilterCheckbox(e.target.checked)}
                   className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
                 />
-                <span>ใช้ตัวกรองกับบัญชีที่สร้าง</span>
+                <span className="font-semibold">ใช้ตัวกรองกับบัญชีที่สร้าง</span>
               </label>
+
+              {useFilterCheckbox && (
+                <div className="mt-3 animate-in fade-in slide-in-from-top-1">
+                  <p className="text-[11px] text-slate-400 mb-2">
+                    ต้องการสร้างตัวกรองแบบกำหนดเอง?{" "}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsCreateModalOpen(false);
+                        setActiveTab("filters");
+                      }}
+                      className="text-indigo-600 hover:text-indigo-800 underline font-medium cursor-pointer"
+                    >
+                      ไปที่หน้าตัวกรองอีเมล
+                    </button>
+                  </p>
+
+                  <div className="border border-slate-200 rounded-2xl p-3 bg-slate-50 max-h-52 overflow-y-auto space-y-2">
+                    <span className="text-[11px] font-bold text-slate-700 block">เทมเพลตระบบ</span>
+                    {systemFilterTemplates.map((tpl) => {
+                      const isSel = selectedCreateFilter === tpl.title;
+                      return (
+                        <label
+                          key={tpl.id}
+                          onClick={() => setSelectedCreateFilter(tpl.title)}
+                          className={`flex items-start gap-2.5 p-2.5 rounded-xl border cursor-pointer transition-all ${
+                            isSel
+                              ? "bg-white border-indigo-500 shadow-xs ring-1 ring-indigo-400"
+                              : "bg-white border-slate-100 hover:border-slate-200"
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="createFilterTemplate"
+                            checked={isSel}
+                            onChange={() => setSelectedCreateFilter(tpl.title)}
+                            className="w-3.5 h-3.5 mt-0.5 text-indigo-600 focus:ring-indigo-500"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <span className="text-xs font-bold text-slate-900 block leading-tight">{tpl.title}</span>
+                            <span className="text-[10px] text-slate-500 block leading-tight mt-0.5">{tpl.desc}</span>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Section: สร้างบัญชีเดี่ยว (Image 1) */}
@@ -1783,6 +1957,208 @@ export default function AdminDashboard({ onExitToClient }) {
                 </>
               )}
             </button>
+
+          </div>
+        </div>
+      )}
+
+      {/* ================= FILTER SELECTION MODAL (Images 4 & 5 Exact Replica) ================= */}
+      {filterModal.isOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl p-6 sm:p-7 animate-in fade-in zoom-in-95 relative max-h-[90vh] flex flex-col">
+            
+            {/* Close button */}
+            <button
+              onClick={() => setFilterModal((prev) => ({ ...prev, isOpen: false }))}
+              className="absolute top-5 right-5 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            {/* Title */}
+            <h4 className="font-bold text-lg text-slate-900 mb-1">{filterModal.title}</h4>
+            <p className="text-xs text-slate-500 mb-1">{filterModal.subtitle}</p>
+            <p className="text-xs text-slate-400 mb-4">
+              ต้องการสร้างตัวกรองแบบกำหนดเอง?{" "}
+              <button
+                type="button"
+                onClick={() => {
+                  setFilterModal((prev) => ({ ...prev, isOpen: false }));
+                  setActiveTab("filters");
+                }}
+                className="text-indigo-600 hover:text-indigo-800 underline font-medium cursor-pointer"
+              >
+                ไปที่หน้าตัวกรองอีเมล
+              </button>
+            </p>
+
+            {/* Radio List Container (Scrollable) */}
+            <div className="space-y-3 overflow-y-auto pr-1 flex-1 mb-5">
+              
+              {/* Option: ไม่ใช้ตัวกรอง */}
+              <label
+                onClick={() => setFilterModal((prev) => ({ ...prev, selectedFilter: "" }))}
+                className={`flex items-center gap-3 p-3.5 rounded-2xl border cursor-pointer transition-all ${
+                  !filterModal.selectedFilter
+                    ? "border-indigo-600 bg-indigo-50/50 ring-1 ring-indigo-500"
+                    : "border-slate-200 hover:border-slate-300 bg-white"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="filterSelectRadioModal"
+                  checked={!filterModal.selectedFilter}
+                  onChange={() => setFilterModal((prev) => ({ ...prev, selectedFilter: "" }))}
+                  className="w-4 h-4 text-indigo-600 focus:ring-indigo-500"
+                />
+                <span className="text-xs font-semibold text-slate-800">ไม่ใช้ตัวกรอง</span>
+              </label>
+
+              {/* Section: เทมเพลตระบบ */}
+              <div className="pt-2">
+                <span className="text-xs font-bold text-slate-700 block mb-2">เทมเพลตระบบ</span>
+                <div className="space-y-2.5">
+                  {systemFilterTemplates.map((tpl) => {
+                    const isSelected = filterModal.selectedFilter === tpl.title;
+                    return (
+                      <label
+                        key={tpl.id}
+                        onClick={() => setFilterModal((prev) => ({ ...prev, selectedFilter: tpl.title }))}
+                        className={`block p-3.5 rounded-2xl border cursor-pointer transition-all ${
+                          isSelected
+                            ? "border-indigo-600 bg-indigo-50/50 ring-1 ring-indigo-500"
+                            : "border-slate-200 hover:border-slate-300 bg-white"
+                        }`}
+                      >
+                        <div className="flex items-start gap-3">
+                          <input
+                            type="radio"
+                            name="filterSelectRadioModal"
+                            checked={isSelected}
+                            onChange={() => setFilterModal((prev) => ({ ...prev, selectedFilter: tpl.title }))}
+                            className="w-4 h-4 mt-0.5 text-indigo-600 focus:ring-indigo-500"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-0.5">
+                              <span className="text-xs font-bold text-slate-900">{tpl.title}</span>
+                              <span className="px-1.5 py-0.2 text-[10px] font-medium rounded-md bg-slate-100 text-slate-600">ระบบ</span>
+                            </div>
+                            <p className="text-[11px] text-slate-500 leading-snug">{tpl.desc}</p>
+                          </div>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+            </div>
+
+            {/* Footer Button (Matching Images 4 & 5: Big blue button) */}
+            <button
+              type="button"
+              onClick={handleSaveFilterModal}
+              className="w-full py-3 px-4 bg-[#2E3192] hover:bg-indigo-900 text-white rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer"
+            >
+              บันทึก
+            </button>
+
+          </div>
+        </div>
+      )}
+
+      {/* ================= CONNECT DOMAIN MODAL ================= */}
+      {isAddDomainModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl p-6 sm:p-7 animate-in fade-in zoom-in-95 relative max-h-[90vh] overflow-y-auto">
+            
+            {/* Close button */}
+            <button
+              onClick={() => setIsAddDomainModalOpen(false)}
+              className="absolute top-5 right-5 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
+                <Globe className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="font-bold text-lg text-slate-900">เชื่อมต่อโดเมนใหม่</h4>
+                <p className="text-xs text-slate-500">เพิ่มโดเมนเพื่อเปิดใช้งานระบบรับอีเมลและรหัส OTP อัตโนมัติ</p>
+              </div>
+            </div>
+
+            <form onSubmit={handleConnectDomain} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  ชื่อโดเมน (Domain Name)
+                </label>
+                <input
+                  type="text"
+                  value={newDomainName}
+                  onChange={(e) => setNewDomainName(e.target.value)}
+                  placeholder="เช่น baxsv.store หรือ lico.moe"
+                  required
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  ประเภท / ที่มา
+                </label>
+                <select
+                  value={newDomainSource}
+                  onChange={(e) => setNewDomainSource(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                >
+                  <option value="ผู้ใช้">ผู้ใช้ (ลูกค้าภายนอกใช้งาน)</option>
+                  <option value="ระบบ">ระบบ (แอดมินใช้งาน)</option>
+                </select>
+              </div>
+
+              {/* Cloudflare Connection Instructions */}
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-indigo-600" />
+                  <span className="text-xs font-bold text-slate-800">การตั้งค่า Cloudflare ให้พร้อมรับอีเมล 100%:</span>
+                </div>
+                <div className="text-[11px] text-slate-600 space-y-2">
+                  <div className="p-2.5 bg-white rounded-xl border border-slate-200">
+                    <p className="font-semibold text-slate-800 mb-1">1. ชี้ MX Records ใน Cloudflare DNS:</p>
+                    <code className="block text-[10px] font-mono text-indigo-700">route1.mx.cloudflare.net (Priority 10)</code>
+                    <code className="block text-[10px] font-mono text-indigo-700">route2.mx.cloudflare.net (Priority 20)</code>
+                    <code className="block text-[10px] font-mono text-indigo-700">route3.mx.cloudflare.net (Priority 30)</code>
+                  </div>
+                  <div className="p-2.5 bg-white rounded-xl border border-slate-200">
+                    <p className="font-semibold text-slate-800 mb-1">2. ตั้ง Email Routing Catch-all Rule:</p>
+                    <p className="text-slate-600">เลือก Catch-all rule: <code className="text-indigo-700 font-mono">*@โดเมนของคุณ</code> &rarr; ส่งต่อไปยัง Worker: <code className="text-indigo-700 font-mono font-bold">ba-otp-email-worker</code></p>
+                  </div>
+                </div>
+                <p className="text-[10px] text-emerald-700 font-medium">
+                  ✓ เมื่อบันทึกที่นี่ ระบบจะเชื่อมโยงกับฐานข้อมูลทันที สามารถสร้างเมลและรับ OTP ได้ทันที
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsAddDomainModalOpen(false)}
+                  className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold cursor-pointer"
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  type="submit"
+                  disabled={isAddingDomain || !newDomainName.trim()}
+                  className="px-5 py-2.5 bg-[#2E3192] hover:bg-indigo-900 text-white rounded-xl text-xs font-bold shadow-md transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  {isAddingDomain ? "กำลังเชื่อมต่อ..." : "ยืนยันการเชื่อมต่อโดเมน"}
+                </button>
+              </div>
+            </form>
 
           </div>
         </div>

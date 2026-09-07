@@ -16,26 +16,141 @@ const adminHeaders = {
   "Prefer": "return=representation"
 };
 
+// Session and Security Settings
+const SESSION_STORAGE_KEY = "BA_STORE_ADMIN_SESSION_V2";
+const ATTEMPTS_KEY = "BA_STORE_ADMIN_LOGIN_ATTEMPTS";
+const LOCKOUT_KEY = "BA_STORE_ADMIN_LOCKOUT_UNTIL";
+export const SESSION_INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCKOUT_DURATION_MS = 5 * 60 * 1000; // 5 minutes
+
 /**
- * ตรวจสอบการล็อกอินแอดมิน
+ * ตรวจสอบสถานะการล็อกเอาท์เนื่องจากถูกล็อกระบบ (Brute-force protection)
+ */
+export function getLockoutRemaining() {
+  try {
+    const lockoutUntil = parseInt(sessionStorage.getItem(LOCKOUT_KEY) || localStorage.getItem(LOCKOUT_KEY) || "0", 10);
+    const now = Date.now();
+    if (lockoutUntil > now) {
+      return Math.ceil((lockoutUntil - now) / 1000);
+    }
+    // Expired lockout
+    sessionStorage.removeItem(LOCKOUT_KEY);
+    localStorage.removeItem(LOCKOUT_KEY);
+    return 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * ตรวจสอบการล็อกอินแอดมิน (พร้อม Brute-force protection & Session Storage)
  */
 export function verifyAdminLogin(username, password) {
+  // 1. Check if locked out
+  const remaining = getLockoutRemaining();
+  if (remaining > 0) {
+    const mins = Math.ceil(remaining / 60);
+    return {
+      success: false,
+      error: `ระบบถูกระงับชั่วคราวเนื่องจากรหัสผ่านผิดเกินกำหนด กรุณารออีก ${mins} นาที (${remaining} วินาที)`
+    };
+  }
+
   const savedCreds = localStorage.getItem("BA_STORE_ADMIN_CUSTOM_CREDS");
   const creds = savedCreds ? JSON.parse(savedCreds) : ADMIN_CREDENTIALS;
 
   if (username === creds.username && password === creds.password) {
-    const token = "admin_token_" + Date.now();
-    localStorage.setItem("BA_STORE_ADMIN_SESSION", token);
-    return { success: true, token };
+    // Reset failed attempts
+    sessionStorage.removeItem(ATTEMPTS_KEY);
+    sessionStorage.removeItem(LOCKOUT_KEY);
+    localStorage.removeItem("BA_STORE_ADMIN_SESSION"); // Clear legacy indefinite session
+
+    // Create session in sessionStorage with strict expiration
+    const sessionData = {
+      token: "admin_token_" + Date.now() + "_" + Math.random().toString(36).substring(2, 9),
+      expiresAt: Date.now() + SESSION_INACTIVITY_TIMEOUT_MS
+    };
+    sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(sessionData));
+
+    return { success: true, token: sessionData.token };
   }
-  return { success: false, error: "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" };
+
+  // Record failed attempt
+  let attempts = parseInt(sessionStorage.getItem(ATTEMPTS_KEY) || "0", 10) + 1;
+  sessionStorage.setItem(ATTEMPTS_KEY, String(attempts));
+
+  if (attempts >= MAX_FAILED_ATTEMPTS) {
+    const lockoutUntil = Date.now() + LOCKOUT_DURATION_MS;
+    sessionStorage.setItem(LOCKOUT_KEY, String(lockoutUntil));
+    localStorage.setItem(LOCKOUT_KEY, String(lockoutUntil));
+    return {
+      success: false,
+      error: `ระบุรหัสผ่านผิดเกิน 5 ครั้ง! ระบบถูกระงับการเข้าสู่ระบบชั่วคราว 5 นาทีเพื่อความปลอดภัยระดับสูงสุด`
+    };
+  }
+
+  const left = MAX_FAILED_ATTEMPTS - attempts;
+  return {
+    success: false,
+    error: `ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง (เหลือโอกาสลองอีก ${left} ครั้งก่อนล็อกระบบ 5 นาที)`
+  };
 }
 
+/**
+ * ตรวจสอบเซสชันแอดมิน (Strict: ตรวจสอบเวลาหมดอายุและใช้ sessionStorage)
+ */
 export function checkAdminSession() {
-  return Boolean(localStorage.getItem("BA_STORE_ADMIN_SESSION"));
+  try {
+    // Purge legacy indefinite localStorage session if present
+    localStorage.removeItem("BA_STORE_ADMIN_SESSION");
+
+    const raw = sessionStorage.getItem(SESSION_STORAGE_KEY);
+    if (!raw) return false;
+
+    const session = JSON.parse(raw);
+    if (!session || !session.token || !session.expiresAt) {
+      sessionStorage.removeItem(SESSION_STORAGE_KEY);
+      return false;
+    }
+
+    // Check expiration
+    if (Date.now() > session.expiresAt) {
+      sessionStorage.removeItem(SESSION_STORAGE_KEY);
+      return false;
+    }
+
+    return true;
+  } catch {
+    sessionStorage.removeItem(SESSION_STORAGE_KEY);
+    return false;
+  }
 }
 
+/**
+ * ต่ออายุเซสชันเมื่อผู้ใช้มีการเคลื่อนไหว (Inactivity Touch)
+ */
+export function touchAdminSession() {
+  try {
+    const raw = sessionStorage.getItem(SESSION_STORAGE_KEY);
+    if (!raw) return false;
+    const session = JSON.parse(raw);
+    if (session && session.expiresAt && Date.now() <= session.expiresAt) {
+      session.expiresAt = Date.now() + SESSION_INACTIVITY_TIMEOUT_MS;
+      sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * ออกจากระบบแอดมิน ล้างข้อมูลทุกส่วนอย่างสมบูรณ์
+ */
 export function adminLogout() {
+  sessionStorage.removeItem(SESSION_STORAGE_KEY);
   localStorage.removeItem("BA_STORE_ADMIN_SESSION");
 }
 
@@ -316,3 +431,91 @@ export async function fetchDomains() {
     return { success: false, domains: [], error: err.message };
   }
 }
+
+/**
+ * เพิ่มและเชื่อมต่อโดเมนใหม่เข้าสู่ระบบ (Connect New Domain)
+ */
+export async function createDomain(name, source = "ผู้ใช้") {
+  try {
+    if (!name || !name.trim()) return { success: false, error: "กรุณาระบุชื่อโดเมน" };
+    const cleanName = name.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+    const res = await fetch(`${BASE_URL}/rest/v1/domains`, {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({
+        name: cleanName,
+        is_active: true
+      })
+    });
+    if (!res.ok) {
+      const errData = await res.json();
+      throw new Error(errData.message || "ไม่สามารถเชื่อมต่อโดเมนได้");
+    }
+    const data = await res.json();
+    return { success: true, domain: data[0] };
+  } catch (err) {
+    console.error("createDomain error:", err);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * ลบโดเมนออกจากระบบ
+ */
+export async function deleteDomain(domainId) {
+  try {
+    const res = await fetch(`${BASE_URL}/rest/v1/domains?id=eq.${domainId}`, {
+      method: "DELETE",
+      headers: adminHeaders
+    });
+    return { success: res.ok };
+  } catch (err) {
+    console.error("deleteDomain error:", err);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * อัปเดตตัวกรองอีเมลของบัญชีเมลเดี่ยว (Mailbox Filter)
+ */
+export async function updateMailboxFilter(mailboxId, filterName) {
+  try {
+    const noteVal = filterName && filterName.trim() && filterName !== "ไม่ใช้ตัวกรอง" ? filterName.trim() : null;
+    const res = await fetch(`${BASE_URL}/rest/v1/mailboxes?id=eq.${mailboxId}`, {
+      method: "PATCH",
+      headers: adminHeaders,
+      body: JSON.stringify({
+        note: noteVal,
+        updated_at: new Date().toISOString()
+      })
+    });
+    return { success: res.ok };
+  } catch (err) {
+    console.error("updateMailboxFilter error:", err);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * อัปเดตตัวกรองอีเมลหลายบัญชีพร้อมกัน (Batch Update Mailboxes Filter)
+ */
+export async function updateBatchMailboxesFilter(mailboxIds, filterName) {
+  try {
+    if (!mailboxIds || mailboxIds.length === 0) return { success: true };
+    const noteVal = filterName && filterName.trim() && filterName !== "ไม่ใช้ตัวกรอง" ? filterName.trim() : null;
+    const idList = mailboxIds.join(",");
+    const res = await fetch(`${BASE_URL}/rest/v1/mailboxes?id=in.(${idList})`, {
+      method: "PATCH",
+      headers: adminHeaders,
+      body: JSON.stringify({
+        note: noteVal,
+        updated_at: new Date().toISOString()
+      })
+    });
+    return { success: res.ok };
+  } catch (err) {
+    console.error("updateBatchMailboxesFilter error:", err);
+    return { success: false, error: err.message };
+  }
+}
+
