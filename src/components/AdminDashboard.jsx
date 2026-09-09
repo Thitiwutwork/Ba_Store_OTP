@@ -86,7 +86,7 @@ export default function AdminDashboard({ onExitToClient }) {
 
   // Create Mailbox Modal (Image 1 replica)
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const [targetCreateDomain, setTargetCreateDomain] = useState("namenoname.store");
+  const [targetCreateDomain, setTargetCreateDomain] = useState("baxsv.store");
   const [pinMode, setPinMode] = useState("none"); // "none" | "random" | "custom"
   const [customPinVal, setCustomPinVal] = useState("");
   const [useFilterCheckbox, setUseFilterCheckbox] = useState(false);
@@ -315,7 +315,7 @@ export default function AdminDashboard({ onExitToClient }) {
     e.preventDefault();
     if (!singlePrefix.trim()) return;
 
-    const domain = targetCreateDomain || "namenoname.store";
+    const domain = targetCreateDomain || "baxsv.store";
     const address = `${singlePrefix.trim().toLowerCase()}@${domain}`;
     const pin = getPinForCreation();
 
@@ -339,7 +339,7 @@ export default function AdminDashboard({ onExitToClient }) {
   // Handle Create Batch Mailboxes
   const handleCreateBatch = async () => {
     const count = Math.min(Math.max(Number(batchCount) || 1, 1), 100);
-    const domain = targetCreateDomain || "namenoname.store";
+    const domain = targetCreateDomain || "baxsv.store";
     const addresses = [];
 
     for (let i = 0; i < count; i++) {
@@ -542,8 +542,8 @@ export default function AdminDashboard({ onExitToClient }) {
   };
 
   // Master domains list from database (no mock domains)
-  const masterDomains = (domains && domains.length > 0 ? domains : [{ name: "namenoname.store" }]).map((dom) => {
-    const dName = dom.name || (typeof dom === "string" ? dom : "namenoname.store");
+  const masterDomains = (domains && domains.length > 0 ? domains : [{ name: "baxsv.store" }]).map((dom) => {
+    const dName = dom.name || (typeof dom === "string" ? dom : "baxsv.store");
     const count = mailboxes.filter((m) => m.address && m.address.toLowerCase().endsWith(`@${dName.toLowerCase()}`)).length;
     return {
       id: dom.id,
@@ -1152,7 +1152,7 @@ export default function AdminDashboard({ onExitToClient }) {
                                 </button>
 
                                 {/* ปุ่ม ลบโดเมน */}
-                                {dom.id && dom.name !== "namenoname.store" && (
+                                {dom.id && dom.name !== "baxsv.store" && (
                                   <button
                                     onClick={() => handleDeleteDomain(dom.id, dom.name)}
                                     className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"

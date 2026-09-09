@@ -1,8 +1,8 @@
-﻿import { supabase, isSupabaseConfigured } from "./supabaseClient";
+import { supabase, isSupabaseConfigured } from "./supabaseClient";
 
 /**
  * ค้นหาข้อมูล Mailbox จากอีเมล
- * @param {string} emailAddress - เช่น user@namenoname.store
+ * @param {string} emailAddress - เช่น user@baxsv.store
  */
 export async function getMailboxInfo(emailAddress) {
   if (!isSupabaseConfigured || !supabase) {

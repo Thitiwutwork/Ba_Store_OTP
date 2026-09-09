@@ -156,7 +156,7 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
 
     if (!clean || !clean.includes('@')) {
       if (!isSilent) {
-        setErrorMessage('กรุณาระบุที่อยู่อีเมลที่ถูกต้อง (เช่น example@namenoname.store)');
+        setErrorMessage('กรุณาระบุที่อยู่อีเมลที่ถูกต้อง (เช่น example@baxsv.store)');
       }
       return;
     }
@@ -480,7 +480,7 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
   const fetchMailDetail = async (mailId, targetEmail = activeEmail, pin = activePin) => {
     try {
       const clean = (targetEmail || '').trim().toLowerCase();
-      if (clean.endsWith('@namenoname.store')) return; // Supabase already loads full text & html!
+      if (clean.endsWith('@baxsv.store') || clean.endsWith('@xbasv.store') || clean.endsWith('@namenoname.store') || clean.endsWith('@lico.moe')) return; // Supabase already loads full text & html!
 
       setLoadingDetailId(mailId);
       const [accountName, domainPart] = clean.split('@');
@@ -574,7 +574,7 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
               type="text"
               value={emailInput}
               onChange={(e) => setEmailInput(e.target.value)}
-              placeholder="example@namenoname.store"
+              placeholder="example@baxsv.store"
               className="w-full pl-10 pr-4 py-3 sm:py-3.5 bg-gray-50/70 hover:bg-white focus:bg-white border border-gray-300 focus:border-pink-500 focus:ring-4 focus:ring-pink-100 rounded-2xl text-sm sm:text-base font-mono tracking-wide text-gray-800 transition-all outline-none"
             />
             {emailInput && (
