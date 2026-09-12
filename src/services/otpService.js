@@ -30,7 +30,7 @@ export async function getMailboxInfo(emailAddress) {
       mailbox: {
         id: data.id,
         address: data.address,
-        hasPin: Boolean(data.pin_code && data.pin_code.trim().length > 0),
+        hasPin: Boolean(data.pin_code && String(data.pin_code).trim().length > 0),
         note: data.note,
         isActive: data.is_active
       }

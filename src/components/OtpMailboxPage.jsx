@@ -179,6 +179,7 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
             if (!pinToUse) {
               setIsLoading(false);
               setIsSubmittingPin(false);
+              setActiveEmail(clean);
               setPendingEmail(clean);
               setIsMailboxLocked(true);
               setIsPinModalOpen(true);
@@ -192,6 +193,10 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
             if (!pinCheck.isMatch) {
               setIsLoading(false);
               setIsSubmittingPin(false);
+              setActiveEmail(clean);
+              setPendingEmail(clean);
+              setIsMailboxLocked(true);
+              setIsPinModalOpen(true);
               setPinErrorMessage('รหัส PIN ไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง');
               return;
             }
@@ -238,10 +243,9 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
               fetchedMails = allMails;
             }
           }
-        } else {
-          // Domain is ours or registered in Supabase, but mailbox has no records yet
-          fetchedMails = [];
         }
+        // Note: If mbResult.exists is false, do not set fetchedMails = [];
+        // Keep fetchedMails = null so Tier 1 (Maily Space Public API) can search and catch 403 PIN challenge!
       } catch (sbErr) {
         console.warn('Supabase fetch error:', sbErr);
       }
@@ -256,7 +260,9 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
         if (accountName && domainPart) {
           const domainId = domainPart.replace(/\./g, '');
           const pubUrl = `https://api.maily.space/mail/public/mails?accountName=${encodeURIComponent(accountName)}&domainId=${encodeURIComponent(domainId)}&size=40`;
-        const pubHeaders = {};
+        const pubHeaders = {
+          'Accept': 'application/json, text/plain, */*'
+        };
         if (pinToUse) {
           pubHeaders['X-Mailbox-Pin'] = pinToUse;
         }
@@ -273,6 +279,7 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
         ) {
           setIsLoading(false);
           setIsSubmittingPin(false);
+          setActiveEmail(clean);
           setPendingEmail(clean);
           setIsMailboxLocked(true);
           setIsPinModalOpen(true);
@@ -480,14 +487,18 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
   const fetchMailDetail = async (mailId, targetEmail = activeEmail, pin = activePin) => {
     try {
       const clean = (targetEmail || '').trim().toLowerCase();
-      if (clean.endsWith('@baxsv.store') || clean.endsWith('@xbasv.store') || clean.endsWith('@namenoname.store') || clean.endsWith('@lico.moe')) return; // Supabase already loads full text & html!
+      // If the email already has full body loaded (e.g. from Supabase), skip remote fetch
+      const existingMail = mails.find((m) => m.id === mailId);
+      if (existingMail && existingMail.html && existingMail.html.length > 50) return;
 
       setLoadingDetailId(mailId);
       const [accountName, domainPart] = clean.split('@');
       if (!accountName || !domainPart) return;
       const domainId = domainPart.replace(/\./g, '');
       const detailUrl = `https://api.maily.space/mail/public/mails/${mailId}?accountName=${encodeURIComponent(accountName)}&domainId=${encodeURIComponent(domainId)}`;
-      const headers = {};
+      const headers = {
+        'Accept': 'application/json, text/plain, */*'
+      };
       if (pin) headers['X-Mailbox-Pin'] = pin;
 
       const res = await fetch(detailUrl, { headers });
@@ -617,7 +628,9 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
                 type="button"
                 onClick={() => {
                   setEmailInput(item);
-                  fetchMails(item);
+                  setActivePin('');
+                  setIsMailboxLocked(false);
+                  fetchMails(item, false, '');
                 }}
                 className={`group px-2.5 py-1 rounded-full text-[11px] font-medium transition-all flex items-center gap-1 border ${
                   activeEmail === item
