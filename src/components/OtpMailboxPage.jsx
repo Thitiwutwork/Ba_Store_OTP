@@ -19,45 +19,187 @@ import { getMailboxInfo, verifyMailboxPin, fetchEmails, subscribeToNewEmails } f
 import { supabase, isSupabaseConfigured } from '../services/supabaseClient';
 
 /**
- * Intelligent OTP Extractor from mail subject and body text
+ * Helper to fetch mail detail directly (returns { html, text, snippet } or null)
+ */
+async function fetchMailDetailDirect(mailId, targetEmail, pin) {
+  if (!mailId) return null;
+  const clean = (targetEmail || '').trim().toLowerCase();
+  const [accountName, domainPart] = clean.split('@');
+  if (!accountName || !domainPart) return null;
+  const domainId = domainPart.replace(/\./g, '');
+
+  const headers = {
+    'Accept': 'application/json, text/plain, */*'
+  };
+  if (pin) headers['X-Mailbox-Pin'] = pin;
+
+  // 1. Try public mailbox detail endpoints (supports domainId and domain parameters)
+  const detailUrls = [
+    `https://api.maily.space/mail/public/mails/${mailId}?accountName=${encodeURIComponent(accountName)}&domainId=${encodeURIComponent(domainId)}`,
+    `https://api.maily.space/mail/public/mails/${mailId}?accountName=${encodeURIComponent(accountName)}&domain=${encodeURIComponent(domainPart)}`
+  ];
+
+  for (const url of detailUrls) {
+    try {
+      const res = await fetch(url, { headers });
+      if (!res.ok) continue;
+      const json = await res.json().catch(() => null);
+      if (!json) continue;
+
+      const full = json.data?.mail || json.data || json.mail || json;
+      const html = full.html || full.bodyHtml || full.contentHtml || full.body_html || '';
+      const text = full.text || full.body || full.bodyText || full.contentText || full.body_text || '';
+      const snippet = full.snippet || '';
+
+      if (html || text) {
+        return { html, text, snippet };
+      }
+    } catch (err) {
+      console.warn('Public detail fetch error on', url, err);
+    }
+  }
+
+  // 2. Fallback: Developer REST API (Tier 2)
+  try {
+    const tier2Headers = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json, text/plain, */*'
+    };
+    if (pin) tier2Headers['X-Mailbox-Pin'] = pin;
+
+    const tier2Body = {
+      apiKey: 'sk_v1_phbofy2tb4gvtmsq4g7nw1ywmmwv6c9p',
+      email: clean,
+      mailId: mailId,
+      size: 1,
+      page: 1
+    };
+    if (pin) tier2Body.pin = pin;
+
+    const directRes = await fetch(`https://api.maily.space/v1/mails/${mailId}`, {
+      method: 'POST',
+      headers: tier2Headers,
+      body: JSON.stringify(tier2Body)
+    });
+    const directJson = await directRes.json().catch(() => null);
+    if (directJson) {
+      const full = directJson.data?.mail || directJson.data || directJson.mail || directJson;
+      const html = full.html || full.bodyHtml || full.contentHtml || '';
+      const text = full.text || full.body || full.bodyText || '';
+      if (html || text) {
+        return { html, text, snippet: full.snippet || '' };
+      }
+    }
+  } catch (tier2Err) {
+    console.warn('Tier 2 detail fetch error:', tier2Err);
+  }
+
+  return null;
+}
+
+/**
+ * Intelligent OTP Extractor from mail subject, body text, and HTML
  */
 function extractOtpFromMail(mail) {
   if (!mail) return null;
-  if (mail.otpCode) return mail.otpCode;
-  const subject = mail.subject || '';
-  const text = mail.text || mail.searchText || mail.snippet || '';
-  const fullContent = `${subject} ${text}`.replace(/[\u00a0\u200b\u200c\u200d]/g, ' ');
+  if (mail.otpCode) return String(mail.otpCode).trim();
 
-  // 1. Check for explicit keywords like "code is 123456", "OTP: 123456", "รหัสยืนยัน: 123456"
-  const keywordRegex = /(?:otp|code|verification|verification code|security code|passcode|pin|รหัส|รหัสยืนยัน|รหัสชั่วคราว|รหัสความปลอดภัย)[\s:：\-–—isareคือได้แก่]*([0-9]{4,8})\b/i;
+  const subject = (mail.subject || '').trim();
+  const text = (mail.text || mail.searchText || mail.snippet || mail.body || '').trim();
+  const html = (mail.html || mail.bodyHtml || mail.contentHtml || '').trim();
+
+  // Helper to extract clean plain text from HTML
+  const htmlToText = (rawHtml) => {
+    if (!rawHtml) return '';
+    return rawHtml
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<br\s*[\/]?>/gi, '\n')
+      .replace(/<\/(?:p|div|tr|h[1-6]|table|section|article)>/gi, '\n')
+      .replace(/<\/td>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&#39;/gi, "'")
+      .replace(/&quot;/gi, '"')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/[\u00a0\u200b\u200c\u200d]/g, ' ');
+  };
+
+  const parsedHtmlText = htmlToText(html);
+  const fullContent = `${subject}\n${text}\n${parsedHtmlText}`;
+
+  // 1. Disney+ / MyDisney explicit pattern (contiguous or space-separated 6 digits)
+  const isDisney = /disney/i.test(mail.from || '') || /disney/i.test(subject) || /mydisney/i.test(fullContent);
+  if (isDisney) {
+    const disneyPasscodeRegex = /(?:passcode|code|enter this code|verify your account|รหัสผ่าน|รหัสยืนยัน)[^\d]{0,80}?(\b[0-9](?:[\s\u00a0]*[0-9]){5}\b)/i;
+    const dMatch = fullContent.match(disneyPasscodeRegex);
+    if (dMatch && dMatch[1]) {
+      const code = dMatch[1].replace(/\s+/g, '');
+      if (code.length === 6) return code;
+    }
+  }
+
+  // 2. Keyword followed by 4-8 digits (contiguous or space-separated)
+  const keywordRegex = /(?:otp|verification code|security code|passcode|one-time password|login code|pin|รหัสยืนยัน|รหัสชั่วคราว|รหัสความปลอดภัย|รหัส OTP|รหัสของคุณคือ|your code is|code is)[\s:：\-–—isareคือได้แก่]*(\b[0-9](?:[\s\u00a0]*[0-9]){3,7}\b)/i;
   const kwMatch = fullContent.match(keywordRegex);
   if (kwMatch && kwMatch[1]) {
-    return kwMatch[1];
+    const code = kwMatch[1].replace(/\s+/g, '');
+    if (code.length >= 4 && code.length <= 8) return code;
   }
 
-  // 1b. Check for number followed by keyword e.g. "060159 คือรหัส OTP", "123456 is your code"
-  const revRegex = /\b([0-9]{4,8})[\s:：\-–—isareคือได้แก่]*(?:otp|code|verification|รหัส|ยืนยัน)/i;
+  // 3. Reverse keyword (number followed by keyword)
+  const revRegex = /(\b[0-9](?:[\s\u00a0]*[0-9]){3,7}\b)[\s:：\-–—isareคือได้แก่]*(?:otp|code|verification|passcode|รหัส|ยืนยัน)/i;
   const revMatch = fullContent.match(revRegex);
   if (revMatch && revMatch[1]) {
-    return revMatch[1];
+    const code = revMatch[1].replace(/\s+/g, '');
+    if (code.length >= 4 && code.length <= 8) return code;
   }
 
-  // 2. Standalone 4-8 digits in Subject (very common in service emails e.g. "Your Netflix code is 123456")
+  // 4. Standalone 4-8 digits in Subject (e.g. "Your Netflix code is 123456")
   const subjectMatch = subject.match(/\b([0-9]{4,8})\b/);
   if (subjectMatch && subjectMatch[1]) {
     return subjectMatch[1];
   }
 
-  // 3. Look for typical 6-digit code anywhere in the content
+  // 5. HTML prominent tag extraction
+  if (html) {
+    const tagRegex = /<(?:strong|b|h1|h2|h3|h4|span|div|td|p)[^>]*?>\s*([0-9](?:[\s\u00a0]*[0-9]){3,7})\s*<\/(?:strong|b|h1|h2|h3|h4|span|div|td|p)>/gi;
+    let tagMatch;
+    while ((tagMatch = tagRegex.exec(html)) !== null) {
+      if (tagMatch[1]) {
+        const code = tagMatch[1].replace(/\s+/g, '');
+        if (code.length === 4 && (code.startsWith('19') || code.startsWith('20'))) {
+          continue;
+        }
+        if (code.length >= 4 && code.length <= 8) {
+          return code;
+        }
+      }
+    }
+  }
+
+  // 6. 6 digits anywhere (spaced or contiguous)
+  const spacedSixDigit = fullContent.match(/\b([0-9]\s+[0-9]\s+[0-9]\s+[0-9]\s+[0-9]\s+[0-9])\b/);
+  if (spacedSixDigit && spacedSixDigit[1]) {
+    return spacedSixDigit[1].replace(/\s+/g, '');
+  }
+
   const sixDigit = fullContent.match(/\b([0-9]{6})\b/);
   if (sixDigit && sixDigit[1]) {
     return sixDigit[1];
   }
 
-  // 4. Any 4-8 digit standalone number
-  const anyDigit = fullContent.match(/\b([0-9]{4,8})\b/);
-  if (anyDigit && anyDigit[1]) {
-    return anyDigit[1];
+  // 7. Any 4-8 digit standalone number
+  const anyDigitMatches = fullContent.match(/\b([0-9]{4,8})\b/g);
+  if (anyDigitMatches) {
+    for (const num of anyDigitMatches) {
+      if (num.length === 4 && (num.startsWith('19') || num.startsWith('20'))) {
+        continue;
+      }
+      return num;
+    }
   }
 
   return null;
@@ -69,10 +211,12 @@ function extractOtpFromMail(mail) {
 function cleanEmailText(text) {
   if (!text) return '';
   return text
-    // Remove standalone bracketed image markdown URLs like [https://...jpg]
-    .replace(/\[https?:\/\/[^\s\]]+\.(?:jpg|jpeg|png|gif|webp|svg)\]/gi, '')
+    // Remove standalone or truncated bracketed image/link markdown like [https://... or [https://...]
+    .replace(/\[https?:\/\/[^\]\r\n]*(?:\]|$)/gi, '')
     // Normalize bracketed redundant emails e.g. [user@domain.com]
     .replace(/\s*\[[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\]/g, '')
+    // Remove unformatted raw URLs
+    .replace(/https?:\/\/[^\s<>'"]+/gi, '')
     // Normalize excessive newlines
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -299,12 +443,12 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
             : (Array.isArray(pubData?.mails) ? pubData.mails : (Array.isArray(pubData) ? pubData : []));
           if (list.length > 0) {
             fetchedMails = list.map((m) => ({
-              id: m.id || `mail-${Math.random().toString(36).substr(2, 9)}`,
+              id: m.id || m._id || m.mailId || `mail-${Math.random().toString(36).substr(2, 9)}`,
               from: m.from || m.sender || 'ไม่ระบุผู้ส่ง',
               to: clean,
               subject: m.subject || '(ไม่มีหัวข้อ)',
-              html: m.html || '',
-              text: m.text || m.body || m.searchText || m.snippet || '',
+              html: m.html || m.bodyHtml || m.contentHtml || '',
+              text: m.text || m.body || m.bodyText || m.searchText || m.snippet || '',
               createdAt: m.createdAt || m.date || new Date().toISOString()
             }));
           } else if (pubRes.status === 200) {
@@ -393,6 +537,24 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
     setIsSubmittingPin(false);
 
     if (fetchedMails && fetchedMails.length > 0) {
+      // If the latest mail has no OTP detected yet (or its text is truncated), pre-fetch detail immediately
+      const latest = fetchedMails[0];
+      if (latest?.id && !extractOtpFromMail(latest)) {
+        try {
+          const detail = await fetchMailDetailDirect(latest.id, clean, pinToUse);
+          if (detail) {
+            fetchedMails[0] = {
+              ...fetchedMails[0],
+              html: detail.html || fetchedMails[0].html,
+              text: detail.text || fetchedMails[0].text,
+              snippet: detail.snippet || fetchedMails[0].snippet
+            };
+          }
+        } catch (detailErr) {
+          console.warn('Initial detail fetch error:', detailErr);
+        }
+      }
+
       setMails(fetchedMails);
       setActiveEmail(clean);
       setEmailInput(clean);
@@ -402,9 +564,9 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
       if (!isSilent && onShowToast) {
         onShowToast(`📬 ดึงข้อความเรียบร้อยแล้ว (${fetchedMails.length} รายการ)`, '✨');
       }
-      // Pre-fetch details for the latest mail in the background
-      if (fetchedMails[0]?.id) {
-        fetchMailDetail(fetchedMails[0].id, clean, pinToUse);
+      // Pre-fetch details for the second mail in the background if present
+      if (fetchedMails.length > 1 && fetchedMails[1]?.id) {
+        fetchMailDetail(fetchedMails[1].id, clean, pinToUse);
       }
     } else {
       setMails([]);
@@ -492,27 +654,16 @@ export default function OtpMailboxPage({ initialEmail = '', onShowToast }) {
       if (existingMail && existingMail.html && existingMail.html.length > 50) return;
 
       setLoadingDetailId(mailId);
-      const [accountName, domainPart] = clean.split('@');
-      if (!accountName || !domainPart) return;
-      const domainId = domainPart.replace(/\./g, '');
-      const detailUrl = `https://api.maily.space/mail/public/mails/${mailId}?accountName=${encodeURIComponent(accountName)}&domainId=${encodeURIComponent(domainId)}`;
-      const headers = {
-        'Accept': 'application/json, text/plain, */*'
-      };
-      if (pin) headers['X-Mailbox-Pin'] = pin;
-
-      const res = await fetch(detailUrl, { headers });
-      const json = await res.json().catch(() => null);
-      if (res.ok && json?.data) {
-        const full = json.data;
+      const detail = await fetchMailDetailDirect(mailId, clean, pin);
+      if (detail) {
         setMails((prevMails) =>
           prevMails.map((m) =>
             m.id === mailId
               ? {
                   ...m,
-                  html: full.html || m.html,
-                  text: full.text || m.text,
-                  snippet: full.snippet || m.snippet
+                  html: detail.html || m.html,
+                  text: detail.text || m.text,
+                  snippet: detail.snippet || m.snippet
                 }
               : m
           )
