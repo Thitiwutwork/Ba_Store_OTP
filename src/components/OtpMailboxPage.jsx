@@ -28,21 +28,21 @@ async function fetchMailDetailDirect(mailId, targetEmail, pin) {
   const [accountName, domainPart] = clean.split('@');
   if (!accountName || !domainPart) return null;
   const domainId = domainPart.replace(/\./g, '');
+  const cleanPin = pin ? String(pin).trim() : '';
 
+  // Omit Content-Type on GET to avoid strict CORS preflight issues
   const headers = {
-    'Accept': 'application/json, text/plain, */*',
-    'Content-Type': 'application/json'
+    'Accept': 'application/json, text/plain, */*'
   };
-  if (pin) {
-    headers['X-Mailbox-Pin'] = pin;
-    headers['x-mailbox-pin'] = pin;
+  if (cleanPin) {
+    headers['X-Mailbox-Pin'] = cleanPin;
   }
 
-  // 1. Try public mailbox detail endpoints (supports domainId and domain parameters with size=1)
+  // 1. Try public mailbox detail endpoints in order
   const detailUrls = [
-    `https://api.maily.space/mail/public/mails/${mailId}?accountName=${encodeURIComponent(accountName)}&domainId=${encodeURIComponent(domainId)}&size=1`,
-    `https://api.maily.space/mail/public/mails/${mailId}?accountName=${encodeURIComponent(accountName)}&domainId=${encodeURIComponent(domainId)}`,
-    `https://api.maily.space/mail/public/mails/${mailId}?accountName=${encodeURIComponent(accountName)}&domain=${encodeURIComponent(domainPart)}&size=1`
+    `https://api.maily.space/mail/public/mails/${encodeURIComponent(mailId)}?accountName=${encodeURIComponent(accountName)}&domainId=${encodeURIComponent(domainId)}&size=1`,
+    `https://api.maily.space/mail/public/mails/detail?id=${encodeURIComponent(mailId)}&accountName=${encodeURIComponent(accountName)}&domainId=${encodeURIComponent(domainId)}`,
+    `https://api.maily.space/mail/public/mails/${encodeURIComponent(mailId)}?accountName=${encodeURIComponent(accountName)}&domainId=${encodeURIComponent(domainId)}`
   ];
 
   for (const url of detailUrls) {
@@ -77,14 +77,13 @@ async function fetchMailDetailDirect(mailId, targetEmail, pin) {
     const proxyHeaders = {
       'Content-Type': 'application/json'
     };
-    if (pin) {
-      proxyHeaders['X-Mailbox-Pin'] = pin;
-      proxyHeaders['x-mailbox-pin'] = pin;
+    if (cleanPin) {
+      proxyHeaders['X-Mailbox-Pin'] = cleanPin;
     }
     const proxyRes = await fetch('/api/get-otp', {
       method: 'POST',
       headers: proxyHeaders,
-      body: JSON.stringify({ email: clean, mailId: mailId, pin: pin, size: 1 })
+      body: JSON.stringify({ email: clean, mailId: mailId, pin: cleanPin, size: 1 })
     });
     const proxyJson = await proxyRes.json().catch(() => null);
     if (proxyJson?.mail) {
@@ -105,9 +104,8 @@ async function fetchMailDetailDirect(mailId, targetEmail, pin) {
       'Content-Type': 'application/json',
       'Accept': 'application/json, text/plain, */*'
     };
-    if (pin) {
-      tier2Headers['X-Mailbox-Pin'] = pin;
-      tier2Headers['x-mailbox-pin'] = pin;
+    if (cleanPin) {
+      tier2Headers['X-Mailbox-Pin'] = cleanPin;
     }
 
     const tier2Body = {
@@ -117,7 +115,7 @@ async function fetchMailDetailDirect(mailId, targetEmail, pin) {
       size: 1,
       page: 1
     };
-    if (pin) tier2Body.pin = pin;
+    if (cleanPin) tier2Body.pin = cleanPin;
 
     const directRes = await fetch(`https://api.maily.space/v1/mails/${mailId}`, {
       method: 'POST',
@@ -187,8 +185,8 @@ function extractOtpFromMail(mail) {
   const isDisney = /disney/i.test(mail.from || '') || /disney/i.test(subject) || /mydisney/i.test(fullContent);
   if (isDisney) {
     const disneyPatterns = [
-      /(?:enter this code|verify your account|passcode is|passcode:?|code:?|one-time passcode|รหัสผ่าน|รหัสยืนยัน)[^\d]{0,150}(\b[0-9](?:[\s\u00a0]*[0-9]){5}\b)/i,
-      /(?:passcode|code)[^a-zA-Z0-9]{0,40}(\b[0-9](?:[\s\u00a0]*[0-9]){5}\b)/i
+      /(?:enter this code|verify your account|passcode is|passcode:?|code:?|one-time passcode|รหัสผ่านแบบใช้ครั้งเดียว(?:ของคุณ)?(?:สำหรับ)?(?:คือ)?|รหัสผ่าน|รหัสยืนยัน)[^\d]{0,150}(\b[0-9](?:[\s\u00a0]*[0-9]){5}\b)/i,
+      /(?:passcode|code|รหัส)[^a-zA-Z0-9]{0,40}(\b[0-9](?:[\s\u00a0]*[0-9]){5}\b)/i
     ];
     for (const pat of disneyPatterns) {
       const dMatch = fullContent.match(pat);
@@ -279,6 +277,9 @@ function cleanEmailText(text) {
     .replace(/\s*\[[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\]/g, '')
     // Remove unformatted raw URLs
     .replace(/https?:\/\/[^\s<>'"]+/gi, '')
+    // Clean broken URL prefixes
+    .replace(/\bhttps?$/gi, '')
+    .replace(/\bht$/gi, '')
     // Normalize excessive newlines
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -302,6 +303,7 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
   const [isPinModalOpen, setIsPinModalOpen] = useState(false);
   const [pinInput, setPinInput] = useState('');
   const [activePin, setActivePin] = useState('');
+  const pinRef = useRef('');
   const [pinErrorMessage, setPinErrorMessage] = useState('');
   const [isSubmittingPin, setIsSubmittingPin] = useState(false);
   const [pendingEmail, setPendingEmail] = useState('');
@@ -354,9 +356,16 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
   };
 
   // Fetch Mails: Dual Strategy (Direct Client Browser -> Serverless Proxy Fallback)
-  const fetchMails = async (targetEmail, isSilent = false, pin = activePin) => {
+  const fetchMails = async (targetEmail, isSilent = false, pin = undefined) => {
     const clean = (targetEmail || emailInput).trim().toLowerCase();
-    const pinToUse = pin !== undefined ? pin : activePin;
+
+    // Resolve PIN with fallback chain: parameter -> pinRef -> activePin -> sessionStorage
+    let savedPin = '';
+    try {
+      savedPin = sessionStorage.getItem('BA_OTP_PIN_' + clean) || '';
+    } catch (e) {}
+
+    const pinToUse = pin !== undefined ? pin : (pinRef.current || activePin || savedPin || '');
 
     if (!clean || !clean.includes('@')) {
       if (!isSilent) {
@@ -383,7 +392,7 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
         const pubUrl = `https://api.maily.space/mail/public/mails?accountName=${encodeURIComponent(accountName)}&domainId=${encodeURIComponent(domainId)}&size=40`;
         const pubHeaders = {};
         if (pinToUse) {
-          pubHeaders['X-Mailbox-Pin'] = pinToUse;
+          pubHeaders['X-Mailbox-Pin'] = String(pinToUse).trim();
         }
 
         const pubRes = await fetch(pubUrl, { headers: pubHeaders });
@@ -396,6 +405,11 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
           pubData?.message === 'กรุณาใส่ PIN' ||
           pubData?.message === 'PIN ไม่ถูกต้อง'
         ) {
+          pinRef.current = '';
+          setActivePin('');
+          try {
+            sessionStorage.removeItem('BA_OTP_PIN_' + clean);
+          } catch (e) {}
           setIsLoading(false);
           setIsSubmittingPin(false);
           setActiveEmail(clean);
@@ -443,7 +457,7 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
           'Accept': 'application/json, text/plain, */*'
         };
         if (pinToUse) {
-          tier2Headers['X-Mailbox-Pin'] = pinToUse;
+          tier2Headers['X-Mailbox-Pin'] = String(pinToUse).trim();
         }
 
         const tier2Body = {
@@ -453,7 +467,7 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
           page: 1
         };
         if (pinToUse) {
-          tier2Body.pin = pinToUse;
+          tier2Body.pin = String(pinToUse).trim();
         }
 
         const directRes = await fetch('https://api.maily.space/v1/mails', {
@@ -470,6 +484,11 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
           directData?.message === 'กรุณาใส่ PIN' ||
           directData?.message === 'PIN ไม่ถูกต้อง'
         ) {
+          pinRef.current = '';
+          setActivePin('');
+          try {
+            sessionStorage.removeItem('BA_OTP_PIN_' + clean);
+          } catch (e) {}
           setIsLoading(false);
           setIsSubmittingPin(false);
           setPendingEmail(clean);
@@ -507,7 +526,7 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
           'Content-Type': 'application/json'
         };
         if (pinToUse) {
-          proxyHeaders['X-Mailbox-Pin'] = pinToUse;
+          proxyHeaders['X-Mailbox-Pin'] = String(pinToUse).trim();
         }
 
         const res = await fetch('/api/get-otp', {
@@ -515,7 +534,7 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
           headers: proxyHeaders,
           body: JSON.stringify({
             email: clean,
-            pin: pinToUse,
+            pin: String(pinToUse).trim(),
             size: 40,
             page: 1
           })
@@ -525,6 +544,11 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
 
         // Detect PIN challenge from proxy
         if (res.status === 403 || proxyData?.requirePin) {
+          pinRef.current = '';
+          setActivePin('');
+          try {
+            sessionStorage.removeItem('BA_OTP_PIN_' + clean);
+          } catch (e) {}
           setIsLoading(false);
           setIsSubmittingPin(false);
           setPendingEmail(clean);
@@ -550,7 +574,11 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
 
     // If fetch succeeded (either with valid PIN or unpinned email)
     if (pinToUse) {
-      setActivePin(pinToUse);
+      pinRef.current = String(pinToUse).trim();
+      setActivePin(String(pinToUse).trim());
+      try {
+        sessionStorage.setItem('BA_OTP_PIN_' + clean, String(pinToUse).trim());
+      } catch (e) {}
       setIsMailboxLocked(false);
       setIsPinModalOpen(false);
       setPinErrorMessage('');
@@ -573,6 +601,10 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
                   text: detail.text || fetchedMails[idx].text,
                   snippet: detail.snippet || fetchedMails[idx].snippet
                 };
+                const newOtp = extractOtpFromMail(fetchedMails[idx]);
+                if (newOtp) {
+                  fetchedMails[idx].otpCode = newOtp;
+                }
               }
             } catch (detailErr) {
               console.warn('Initial detail fetch error for mail', idx, detailErr);
@@ -606,9 +638,15 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
   // Trigger search on form submit
   const handleSearchSubmit = (e) => {
     if (e) e.preventDefault();
-    setActivePin('');
+    const clean = emailInput.trim().toLowerCase();
+    let savedPin = '';
+    try {
+      savedPin = sessionStorage.getItem('BA_OTP_PIN_' + clean) || '';
+    } catch (err) {}
+    pinRef.current = savedPin;
+    setActivePin(savedPin);
     setIsMailboxLocked(false);
-    fetchMails(emailInput, false, '');
+    fetchMails(clean, false, savedPin);
   };
 
   // Handle PIN Unlock Submit
@@ -621,16 +659,27 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
     }
     setPinErrorMessage('');
     setIsSubmittingPin(true);
-    fetchMails(pendingEmail || activeEmail || emailInput, false, sanitized);
+    pinRef.current = sanitized;
+    const target = (pendingEmail || activeEmail || emailInput).trim().toLowerCase();
+    try {
+      sessionStorage.setItem('BA_OTP_PIN_' + target, sanitized);
+    } catch (err) {}
+    fetchMails(target, false, sanitized);
   };
 
   // If initialEmail changes, auto-search
   useEffect(() => {
     if (initialEmail && initialEmail.trim()) {
-      setEmailInput(initialEmail.trim());
-      setActivePin('');
+      const clean = initialEmail.trim().toLowerCase();
+      setEmailInput(clean);
+      let savedPin = '';
+      try {
+        savedPin = sessionStorage.getItem('BA_OTP_PIN_' + clean) || '';
+      } catch (err) {}
+      pinRef.current = savedPin;
+      setActivePin(savedPin);
       setIsMailboxLocked(false);
-      fetchMails(initialEmail.trim(), false, '');
+      fetchMails(clean, false, savedPin);
     }
   }, [initialEmail]);
 
@@ -644,7 +693,7 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
     timerRef.current = setInterval(() => {
       setCountdown((prev) => {
         if (prev <= 1) {
-          fetchMails(activeEmail, true, activePin);
+          fetchMails(activeEmail, true, pinRef.current || activePin);
           return 5;
         }
         return prev - 1;
@@ -668,27 +717,39 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
   };
 
   // Fetch full email detail (HTML and full text body)
-  const fetchMailDetail = async (mailId, targetEmail = activeEmail, pin = activePin) => {
+  const fetchMailDetail = async (mailId, targetEmail = activeEmail, pin = undefined) => {
     try {
       const clean = (targetEmail || '').trim().toLowerCase();
       // If the email already has full body loaded (e.g. from Supabase), skip remote fetch
       const existingMail = mails.find((m) => m.id === mailId);
       if (existingMail && existingMail.html && existingMail.html.length > 50) return;
 
+      let savedPin = '';
+      try {
+        savedPin = sessionStorage.getItem('BA_OTP_PIN_' + clean) || '';
+      } catch (e) {}
+      const pinToUse = pin !== undefined ? pin : (pinRef.current || activePin || savedPin || '');
+
       setLoadingDetailId(mailId);
-      const detail = await fetchMailDetailDirect(mailId, clean, pin);
+      const detail = await fetchMailDetailDirect(mailId, clean, pinToUse);
       if (detail) {
         setMails((prevMails) =>
-          prevMails.map((m) =>
-            m.id === mailId
-              ? {
-                  ...m,
-                  html: detail.html || m.html,
-                  text: detail.text || m.text,
-                  snippet: detail.snippet || m.snippet
-                }
-              : m
-          )
+          prevMails.map((m) => {
+            if (m.id === mailId) {
+              const updated = {
+                ...m,
+                html: detail.html || m.html,
+                text: detail.text || m.text,
+                snippet: detail.snippet || m.snippet
+              };
+              const newOtp = extractOtpFromMail(updated);
+              if (newOtp) {
+                updated.otpCode = newOtp;
+              }
+              return updated;
+            }
+            return m;
+          })
         );
       }
     } catch (e) {
@@ -800,10 +861,16 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
                 key={item}
                 type="button"
                 onClick={() => {
-                  setEmailInput(item);
-                  setActivePin('');
+                  const clean = item.trim().toLowerCase();
+                  setEmailInput(clean);
+                  let savedPin = '';
+                  try {
+                    savedPin = sessionStorage.getItem('BA_OTP_PIN_' + clean) || '';
+                  } catch (err) {}
+                  pinRef.current = savedPin;
+                  setActivePin(savedPin);
                   setIsMailboxLocked(false);
-                  fetchMails(item, false, '');
+                  fetchMails(clean, false, savedPin);
                 }}
                 className={`group px-2.5 py-1 rounded-full text-[11px] font-medium transition-all flex items-center gap-1 border ${
                   activeEmail === item
@@ -972,7 +1039,7 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
           ) : (
             <div className="space-y-4">
               {mails.map((mail, index) => {
-                const otpCode = extractOtpFromMail(mail);
+                const otpCode = mail.otpCode || extractOtpFromMail(mail);
                 const isCopied = copiedOtpId === mail.id;
                 const isExpanded = expandedMailId === mail.id;
                 const isLatest = index === 0;
