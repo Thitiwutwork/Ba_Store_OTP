@@ -19,6 +19,11 @@ import {
   X
 } from 'lucide-react';
 
+// Module-level in-memory cache for mail details: mailId -> { html, text, snippet, otpCode }
+const mailDetailCache = new Map();
+// Set of mail IDs currently in-flight to prevent duplicate concurrent requests
+const inFlightDetailIds = new Set();
+
 /**
  * Helper to fetch mail detail directly (returns { html, text, snippet } or null)
  */
@@ -30,12 +35,21 @@ async function fetchMailDetailDirect(mailId, targetEmail, pin) {
   const domainId = domainPart.replace(/\./g, '');
   const cleanPin = pin ? String(pin).trim() : '';
 
+  // Check cache first
+  if (mailDetailCache.has(mailId)) {
+    const cached = mailDetailCache.get(mailId);
+    if (cached && (cached.html || cached.text)) {
+      return cached;
+    }
+  }
+
   // Omit Content-Type on GET to avoid strict CORS preflight issues
   const headers = {
     'Accept': 'application/json, text/plain, */*'
   };
   if (cleanPin) {
     headers['X-Mailbox-Pin'] = cleanPin;
+    headers['x-mailbox-pin'] = cleanPin;
   }
 
   // 1. Try public mailbox detail endpoints in order
@@ -47,7 +61,10 @@ async function fetchMailDetailDirect(mailId, targetEmail, pin) {
 
   for (const url of detailUrls) {
     try {
-      const res = await fetch(url, { headers });
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 6000);
+      const res = await fetch(url, { headers, signal: controller.signal });
+      clearTimeout(timer);
       if (!res.ok) continue;
       const json = await res.json().catch(() => null);
       if (!json) continue;
@@ -68,7 +85,7 @@ async function fetchMailDetailDirect(mailId, targetEmail, pin) {
         }
       }
     } catch (err) {
-      console.warn('Public detail fetch error on', url, err);
+      // ignore abort or network errors and continue to next fallback
     }
   }
 
@@ -80,11 +97,15 @@ async function fetchMailDetailDirect(mailId, targetEmail, pin) {
     if (cleanPin) {
       proxyHeaders['X-Mailbox-Pin'] = cleanPin;
     }
+    const proxyController = new AbortController();
+    const proxyTimer = setTimeout(() => proxyController.abort(), 6000);
     const proxyRes = await fetch('/api/get-otp', {
       method: 'POST',
       headers: proxyHeaders,
-      body: JSON.stringify({ email: clean, mailId: mailId, pin: cleanPin, size: 1 })
+      body: JSON.stringify({ email: clean, mailId: mailId, pin: cleanPin, size: 1 }),
+      signal: proxyController.signal
     });
+    clearTimeout(proxyTimer);
     const proxyJson = await proxyRes.json().catch(() => null);
     if (proxyJson?.mail) {
       const m = proxyJson.mail;
@@ -94,9 +115,7 @@ async function fetchMailDetailDirect(mailId, targetEmail, pin) {
         return { html, text, snippet: m.snippet || '' };
       }
     }
-  } catch (proxyErr) {
-    console.warn('Proxy detail fetch error:', proxyErr);
-  }
+  } catch (proxyErr) {}
 
   // 3. Fallback: Developer REST API (Tier 2)
   try {
@@ -135,9 +154,7 @@ async function fetchMailDetailDirect(mailId, targetEmail, pin) {
         }
       }
     }
-  } catch (tier2Err) {
-    console.warn('Tier 2 detail fetch error:', tier2Err);
-  }
+  } catch (tier2Err) {}
 
   return null;
 }
@@ -463,15 +480,32 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
             ? pubData.data.mails
             : (Array.isArray(pubData?.mails) ? pubData.mails : (Array.isArray(pubData) ? pubData : []));
           if (list.length > 0) {
-            fetchedMails = list.map((m) => ({
-              id: m.id || `mail-${Math.random().toString(36).substr(2, 9)}`,
-              from: m.from || m.sender || 'ไม่ระบุผู้ส่ง',
-              to: clean,
-              subject: m.subject || '(ไม่มีหัวข้อ)',
-              html: m.html || '',
-              text: m.text || m.body || m.searchText || m.snippet || '',
-              createdAt: m.createdAt || m.date || new Date().toISOString()
-            }));
+            fetchedMails = list.map((m) => {
+              const cached = mailDetailCache.get(m.id);
+              const mailObj = {
+                id: m.id || `mail-${Math.random().toString(36).substr(2, 9)}`,
+                from: m.from || m.sender || 'ไม่ระบุผู้ส่ง',
+                to: clean,
+                subject: m.subject || '(ไม่มีหัวข้อ)',
+                html: cached?.html || m.html || '',
+                text: cached?.text || m.text || m.body || m.searchText || m.snippet || '',
+                snippet: m.snippet || cached?.snippet || '',
+                createdAt: m.createdAt || m.date || new Date().toISOString()
+              };
+              const initialOtp = cached?.otpCode || extractOtpFromMail(mailObj);
+              if (initialOtp && isValidOtp(initialOtp)) {
+                mailObj.otpCode = initialOtp;
+                if (!cached) {
+                  mailDetailCache.set(mailObj.id, {
+                    html: mailObj.html,
+                    text: mailObj.text,
+                    snippet: mailObj.snippet,
+                    otpCode: initialOtp
+                  });
+                }
+              }
+              return mailObj;
+            });
           } else if (pubRes.status === 200) {
             fetchedMails = [];
           }
@@ -541,7 +575,32 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
             ? directData.data.mails
             : (Array.isArray(directData?.mails) ? directData.mails : []);
           if (list.length > 0) {
-            fetchedMails = list;
+            fetchedMails = list.map((m) => {
+              const cached = mailDetailCache.get(m.id);
+              const mailObj = {
+                id: m.id || `mail-${Math.random().toString(36).substr(2, 9)}`,
+                from: m.from || m.sender || 'ไม่ระบุผู้ส่ง',
+                to: clean,
+                subject: m.subject || '(ไม่มีหัวข้อ)',
+                html: cached?.html || m.html || '',
+                text: cached?.text || m.text || m.body || m.searchText || m.snippet || '',
+                snippet: m.snippet || cached?.snippet || '',
+                createdAt: m.createdAt || m.date || new Date().toISOString()
+              };
+              const initialOtp = cached?.otpCode || extractOtpFromMail(mailObj);
+              if (initialOtp && isValidOtp(initialOtp)) {
+                mailObj.otpCode = initialOtp;
+                if (!cached) {
+                  mailDetailCache.set(mailObj.id, {
+                    html: mailObj.html,
+                    text: mailObj.text,
+                    snippet: mailObj.snippet,
+                    otpCode: initialOtp
+                  });
+                }
+              }
+              return mailObj;
+            });
           } else if (directData?.statusCode === 200 || directRes.status === 200 || directRes.status === 201) {
             fetchedMails = [];
           }
@@ -597,7 +656,28 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
         }
 
         if (res.ok && proxyData?.success && Array.isArray(proxyData.mails) && proxyData.mails.length > 0) {
-          fetchedMails = proxyData.mails;
+          fetchedMails = proxyData.mails.map((m) => {
+            const cached = mailDetailCache.get(m.id);
+            const mailObj = {
+              ...m,
+              html: cached?.html || m.html || '',
+              text: cached?.text || m.text || '',
+              snippet: m.snippet || cached?.snippet || ''
+            };
+            const initialOtp = cached?.otpCode || extractOtpFromMail(mailObj);
+            if (initialOtp && isValidOtp(initialOtp)) {
+              mailObj.otpCode = initialOtp;
+              if (!cached) {
+                mailDetailCache.set(mailObj.id, {
+                  html: mailObj.html,
+                  text: mailObj.text,
+                  snippet: mailObj.snippet,
+                  otpCode: initialOtp
+                });
+              }
+            }
+            return mailObj;
+          });
         }
       } catch (proxyErr) {
         console.warn('Tier 3 proxy fallback error:', proxyErr);
@@ -619,32 +699,7 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
     setIsSubmittingPin(false);
 
     if (fetchedMails && fetchedMails.length > 0) {
-      // Pre-fetch details for the top 3 emails immediately in parallel so OTP and full body are ready
-      const topCount = Math.min(fetchedMails.length, 3);
-      await Promise.all(
-        fetchedMails.slice(0, topCount).map(async (m, idx) => {
-          if (m?.id && (!m.html || !m.text || m.text.length <= 150 || !extractOtpFromMail(m))) {
-            try {
-              const detail = await fetchMailDetailDirect(m.id, clean, pinToUse);
-              if (detail) {
-                fetchedMails[idx] = {
-                  ...fetchedMails[idx],
-                  html: detail.html || fetchedMails[idx].html,
-                  text: detail.text || fetchedMails[idx].text,
-                  snippet: detail.snippet || fetchedMails[idx].snippet
-                };
-                const newOtp = extractOtpFromMail(fetchedMails[idx]);
-                if (newOtp && isValidOtp(newOtp)) {
-                  fetchedMails[idx].otpCode = newOtp;
-                }
-              }
-            } catch (detailErr) {
-              console.warn('Initial detail fetch error for mail', idx, detailErr);
-            }
-          }
-        })
-      );
-
+      // 1. Immediately render mails list so the user sees all messages right away
       setMails([...fetchedMails]);
       setActiveEmail(clean);
       setEmailInput(clean);
@@ -653,6 +708,62 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
       setWarningMessage('');
       if (!isSilent && onShowToast) {
         onShowToast(`📬 ดึงข้อความเรียบร้อยแล้ว (${fetchedMails.length} รายการ)`, '✨');
+      }
+
+      // 2. Background queue: sequentially fetch details for recent emails lacking an OTP (up to 15 emails)
+      const pendingMails = fetchedMails.filter(
+        (m) => m.id && (!m.otpCode || !isValidOtp(m.otpCode)) && (!m.html || m.html.length < 50)
+      ).slice(0, 15);
+
+      if (pendingMails.length > 0) {
+        (async () => {
+          for (const mailItem of pendingMails) {
+            if (inFlightDetailIds.has(mailItem.id) || mailDetailCache.has(mailItem.id)) continue;
+            inFlightDetailIds.add(mailItem.id);
+            try {
+              const detail = await fetchMailDetailDirect(mailItem.id, clean, pinToUse);
+              if (detail) {
+                const merged = {
+                  ...mailItem,
+                  html: detail.html || mailItem.html,
+                  text: detail.text || mailItem.text,
+                  snippet: detail.snippet || mailItem.snippet
+                };
+                const newOtp = extractOtpFromMail(merged);
+                if (newOtp && isValidOtp(newOtp)) {
+                  merged.otpCode = newOtp;
+                }
+                mailDetailCache.set(mailItem.id, {
+                  html: merged.html,
+                  text: merged.text,
+                  snippet: merged.snippet,
+                  otpCode: merged.otpCode
+                });
+                setMails((prevMails) =>
+                  prevMails.map((item) => (item.id === mailItem.id ? { ...item, ...merged } : item))
+                );
+              } else {
+                mailDetailCache.set(mailItem.id, {
+                  html: ' ',
+                  text: mailItem.text,
+                  snippet: mailItem.snippet,
+                  otpCode: null
+                });
+              }
+            } catch (queueErr) {
+              console.warn('Queue fetch error for mail', mailItem.id, queueErr);
+              mailDetailCache.set(mailItem.id, {
+                html: ' ',
+                text: mailItem.text,
+                snippet: mailItem.snippet,
+                otpCode: null
+              });
+            } finally {
+              inFlightDetailIds.delete(mailItem.id);
+            }
+            await new Promise((resolve) => setTimeout(resolve, 80));
+          }
+        })();
       }
     } else {
       setMails([]);
@@ -752,7 +863,16 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
   const fetchMailDetail = async (mailId, targetEmail = activeEmail, pin = undefined) => {
     try {
       const clean = (targetEmail || '').trim().toLowerCase();
-      // If the email already has full body loaded (e.g. from Supabase), skip remote fetch
+      
+      // If already in cache with full HTML, update state from cache immediately
+      const cached = mailDetailCache.get(mailId);
+      if (cached && cached.html && cached.html.length > 50) {
+        setMails((prevMails) =>
+          prevMails.map((m) => (m.id === mailId ? { ...m, ...cached } : m))
+        );
+        return;
+      }
+
       const existingMail = mails.find((m) => m.id === mailId);
       if (existingMail && existingMail.html && existingMail.html.length > 50) return;
 
@@ -765,20 +885,27 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
       setLoadingDetailId(mailId);
       const detail = await fetchMailDetailDirect(mailId, clean, pinToUse);
       if (detail) {
+        const merged = {
+          html: detail.html,
+          text: detail.text,
+          snippet: detail.snippet
+        };
+        const current = mails.find((m) => m.id === mailId) || {};
+        const newOtp = extractOtpFromMail({ ...current, ...merged });
+        if (newOtp && isValidOtp(newOtp)) {
+          merged.otpCode = newOtp;
+        }
+        mailDetailCache.set(mailId, {
+          html: merged.html,
+          text: merged.text,
+          snippet: merged.snippet,
+          otpCode: merged.otpCode
+        });
+
         setMails((prevMails) =>
           prevMails.map((m) => {
             if (m.id === mailId) {
-              const updated = {
-                ...m,
-                html: detail.html || m.html,
-                text: detail.text || m.text,
-                snippet: detail.snippet || m.snippet
-              };
-              const newOtp = extractOtpFromMail(updated);
-              if (newOtp && isValidOtp(newOtp)) {
-                updated.otpCode = newOtp;
-              }
-              return updated;
+              return { ...m, ...merged };
             }
             return m;
           })
@@ -798,11 +925,75 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
     } else {
       setExpandedMailId(id);
       const mail = mails.find((m) => m.id === id);
-      if (mail && (!mail.html || !mail.text || mail.text.length <= 150)) {
+      if (mail && (!mail.html || mail.html.length < 50)) {
         await fetchMailDetail(id);
       }
     }
   };
+
+  // Continuous background worker: ensure visible emails lacking an OTP have details fetched and cached
+  useEffect(() => {
+    if (!mails || mails.length === 0 || !activeEmail) return;
+    const unextracted = mails.filter(
+      (m) => m.id && (!m.otpCode || !isValidOtp(m.otpCode)) && (!m.html || m.html.length < 50) && !inFlightDetailIds.has(m.id) && !mailDetailCache.has(m.id)
+    ).slice(0, 15);
+
+    if (unextracted.length === 0) return;
+
+    let isCancelled = false;
+    (async () => {
+      for (const m of unextracted) {
+        if (isCancelled) break;
+        if (inFlightDetailIds.has(m.id) || mailDetailCache.has(m.id)) continue;
+        inFlightDetailIds.add(m.id);
+        try {
+          const detail = await fetchMailDetailDirect(m.id, activeEmail, pinRef.current || activePin);
+          if (detail && !isCancelled) {
+            const merged = {
+              ...m,
+              html: detail.html || m.html,
+              text: detail.text || m.text,
+              snippet: detail.snippet || m.snippet
+            };
+            const newOtp = extractOtpFromMail(merged);
+            if (newOtp && isValidOtp(newOtp)) {
+              merged.otpCode = newOtp;
+            }
+            mailDetailCache.set(m.id, {
+              html: merged.html,
+              text: merged.text,
+              snippet: merged.snippet,
+              otpCode: merged.otpCode
+            });
+            setMails((prev) =>
+              prev.map((item) => (item.id === m.id ? { ...item, ...merged } : item))
+            );
+          } else if (!isCancelled) {
+            mailDetailCache.set(m.id, {
+              html: ' ',
+              text: m.text,
+              snippet: m.snippet,
+              otpCode: null
+            });
+          }
+        } catch (e) {
+          mailDetailCache.set(m.id, {
+            html: ' ',
+            text: m.text,
+            snippet: m.snippet,
+            otpCode: null
+          });
+        } finally {
+          inFlightDetailIds.delete(m.id);
+        }
+        await new Promise((r) => setTimeout(r, 80));
+      }
+    })();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [mails, activeEmail, activePin]);
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
