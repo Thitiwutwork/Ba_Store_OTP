@@ -143,11 +143,25 @@ async function fetchMailDetailDirect(mailId, targetEmail, pin) {
 }
 
 /**
+ * Validation helper: ensures a candidate code is a real OTP and not a hex color (e.g. #000000) or year
+ */
+function isValidOtp(code) {
+  if (!code) return false;
+  const cleanCode = String(code).replace(/\s+/g, '');
+  if (cleanCode.length < 4 || cleanCode.length > 8) return false;
+  // Reject all zeroes (which comes from #000000 black hex color in HTML/markdown)
+  if (/^0+$/.test(cleanCode)) return false;
+  // Reject years
+  if (cleanCode.length === 4 && (cleanCode.startsWith('19') || cleanCode.startsWith('20'))) return false;
+  return true;
+}
+
+/**
  * Intelligent OTP Extractor from mail subject, body text, and HTML
  */
 function extractOtpFromMail(mail) {
   if (!mail) return null;
-  if (mail.otpCode) return String(mail.otpCode).trim();
+  if (mail.otpCode && isValidOtp(mail.otpCode)) return String(mail.otpCode).trim();
 
   const subject = (mail.subject || '').trim();
   const text = (mail.text || mail.searchText || mail.snippet || mail.body || '').trim();
@@ -157,6 +171,7 @@ function extractOtpFromMail(mail) {
   const htmlToText = (rawHtml) => {
     if (!rawHtml) return '';
     return rawHtml
+      .replace(/<!--[\s\S]*?-->/g, ' ') // Strip HTML comments
       .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, ' ')
       .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, ' ')
       .replace(/<br\s*[\/]?>/gi, '\n')
@@ -175,24 +190,40 @@ function extractOtpFromMail(mail) {
   const parsedHtmlText = htmlToText(html);
 
   // Clean URLs & bracketed links so long tokens with digits don't block regex matching
-  const cleanSubject = subject.replace(/https?:\/\/[^\s\]>'"]+/gi, ' ');
-  const cleanText = text.replace(/\[?https?:\/\/[^\s\]>'"]+\]?/gi, ' ');
-  const cleanHtmlText = parsedHtmlText.replace(/https?:\/\/[^\s\]>'"]+/gi, ' ');
+  // ALSO strip hex color codes (e.g. #000000, #ffffff, #111111) and CSS color declarations
+  const cleanSubject = subject
+    .replace(/https?:\/\/[^\s\]>'"]+/gi, ' ')
+    .replace(/#[0-9a-fA-F]{3,8}\b/gi, ' ');
 
-  const fullContent = `${cleanSubject}\n${cleanText}\n${cleanHtmlText}`;
+  const cleanText = text
+    .replace(/\[?https?:\/\/[^\s\]>'"]+\]?/gi, ' ')
+    .replace(/#[0-9a-fA-F]{3,8}\b/gi, ' ')
+    .replace(/\[#[0-9a-fA-F]{3,8}\]/gi, ' ')
+    .replace(/\b(?:color|background|bgcolor|fill|stroke)\s*[:=]\s*["']?#?[0-9a-fA-F]{3,8}["']?/gi, ' ');
+
+  const cleanHtmlText = parsedHtmlText
+    .replace(/https?:\/\/[^\s\]>'"]+/gi, ' ')
+    .replace(/#[0-9a-fA-F]{3,8}\b/gi, ' ')
+    .replace(/\[#[0-9a-fA-F]{3,8}\]/gi, ' ')
+    .replace(/\b(?:color|background|bgcolor|fill|stroke)\s*[:=]\s*["']?#?[0-9a-fA-F]{3,8}["']?/gi, ' ');
+
+  const fullContent = `${cleanSubject}\n${cleanText}\n${cleanHtmlText}`
+    .replace(/#[0-9a-fA-F]{3,8}\b/gi, ' ');
 
   // 1. Disney+ / MyDisney explicit pattern (contiguous or space-separated 6 digits)
   const isDisney = /disney/i.test(mail.from || '') || /disney/i.test(subject) || /mydisney/i.test(fullContent);
   if (isDisney) {
     const disneyPatterns = [
+      // Pattern A: Passcode near/after "one-time passcode" even across duration like "expire in 15 minutes"
+      /(?:one-time passcode|passcode|code|รหัสผ่านแบบใช้ครั้งเดียว|รหัสยืนยัน)[\s\S]{0,350}?(?:expire[s]? in \d+\s*(?:minutes?|mins?|นาที))?[\s\S]{0,120}?(?<![\d#])([0-9](?:[\s\u00a0]*[0-9]){5})(?!\d)/i,
       /(?:enter this code|verify your account|passcode is|passcode:?|code:?|one-time passcode|รหัสผ่านแบบใช้ครั้งเดียว(?:ของคุณ)?(?:สำหรับ)?(?:คือ)?|รหัสผ่าน|รหัสยืนยัน)[^\d]{0,150}(\b[0-9](?:[\s\u00a0]*[0-9]){5}\b)/i,
-      /(?:passcode|code|รหัส)[^a-zA-Z0-9]{0,40}(\b[0-9](?:[\s\u00a0]*[0-9]){5}\b)/i
+      /(?:passcode|code|รหัส)[^a-zA-Z0-9#]{0,40}(\b[0-9](?:[\s\u00a0]*[0-9]){5}\b)/i
     ];
     for (const pat of disneyPatterns) {
       const dMatch = fullContent.match(pat);
       if (dMatch && dMatch[1]) {
         const code = dMatch[1].replace(/\s+/g, '');
-        if (code.length === 6) return code;
+        if (code.length === 6 && isValidOtp(code)) return code;
       }
     }
   }
@@ -202,7 +233,7 @@ function extractOtpFromMail(mail) {
   const kwMatch = fullContent.match(keywordRegex);
   if (kwMatch && kwMatch[1]) {
     const code = kwMatch[1].replace(/\s+/g, '');
-    if (code.length >= 4 && code.length <= 8) return code;
+    if (isValidOtp(code)) return code;
   }
 
   // 3. Reverse keyword (number followed by keyword)
@@ -210,55 +241,53 @@ function extractOtpFromMail(mail) {
   const revMatch = fullContent.match(revRegex);
   if (revMatch && revMatch[1]) {
     const code = revMatch[1].replace(/\s+/g, '');
-    if (code.length >= 4 && code.length <= 8) return code;
+    if (isValidOtp(code)) return code;
   }
 
   // 4. Standalone 4-8 digits in Subject (e.g. "Your Netflix code is 123456")
   const subjectMatch = cleanSubject.match(/\b([0-9]{4,8})\b/);
   if (subjectMatch && subjectMatch[1]) {
     const code = subjectMatch[1];
-    if (!(code.length === 4 && (code.startsWith('19') || code.startsWith('20')))) {
-      return code;
-    }
+    if (isValidOtp(code)) return code;
   }
 
   // 5. HTML prominent tag extraction
   if (html) {
+    const cleanHtmlForTags = html
+      .replace(/<!--[\s\S]*?-->/g, ' ')
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, ' ');
+
     const tagRegex = /<(?:strong|b|h1|h2|h3|h4|span|div|td|p)[^>]*?>\s*([0-9](?:[\s\u00a0]*[0-9]){3,7})\s*<\/(?:strong|b|h1|h2|h3|h4|span|div|td|p)>/gi;
     let tagMatch;
-    while ((tagMatch = tagRegex.exec(html)) !== null) {
+    while ((tagMatch = tagRegex.exec(cleanHtmlForTags)) !== null) {
       if (tagMatch[1]) {
         const code = tagMatch[1].replace(/\s+/g, '');
-        if (code.length === 4 && (code.startsWith('19') || code.startsWith('20'))) {
-          continue;
-        }
-        if (code.length >= 4 && code.length <= 8) {
-          return code;
-        }
+        if (isValidOtp(code)) return code;
       }
     }
   }
 
   // 6. 6 space-separated digits (e.g. "4 2 9 8 1 0")
-  const spacedSixDigit = fullContent.match(/(?<!\d)([0-9]\s+[0-9]\s+[0-9]\s+[0-9]\s+[0-9]\s+[0-9])(?!\d)/);
+  const spacedSixDigit = fullContent.match(/(?<![\d#])([0-9]\s+[0-9]\s+[0-9]\s+[0-9]\s+[0-9]\s+[0-9])(?!\d)/);
   if (spacedSixDigit && spacedSixDigit[1]) {
-    return spacedSixDigit[1].replace(/\s+/g, '');
+    const code = spacedSixDigit[1].replace(/\s+/g, '');
+    if (isValidOtp(code)) return code;
   }
 
-  // 7. 6 contiguous digits (not part of hex hash or larger number)
-  const sixDigit = fullContent.match(/(?<![a-zA-Z0-9])([0-9]{6})(?![a-zA-Z0-9])/);
-  if (sixDigit && sixDigit[1]) {
-    return sixDigit[1];
+  // 7. 6 contiguous digits (not part of hex hash # or word or larger number)
+  const sixDigitMatches = fullContent.match(/(?<![a-zA-Z0-9#])([0-9]{6})(?![a-zA-Z0-9])/g);
+  if (sixDigitMatches) {
+    for (const num of sixDigitMatches) {
+      if (isValidOtp(num)) return num;
+    }
   }
 
   // 8. Any 4-8 digit standalone number
-  const anyDigitMatches = fullContent.match(/(?<![a-zA-Z0-9])([0-9]{4,8})(?![a-zA-Z0-9])/g);
+  const anyDigitMatches = fullContent.match(/(?<![a-zA-Z0-9#])([0-9]{4,8})(?![a-zA-Z0-9])/g);
   if (anyDigitMatches) {
     for (const num of anyDigitMatches) {
-      if (num.length === 4 && (num.startsWith('19') || num.startsWith('20'))) {
-        continue;
-      }
-      return num;
+      if (isValidOtp(num)) return num;
     }
   }
 
@@ -275,6 +304,9 @@ function cleanEmailText(text) {
     .replace(/\[https?:\/\/[^\]\r\n]*(?:\]|$)/gi, '')
     // Normalize bracketed redundant emails e.g. [user@domain.com]
     .replace(/\s*\[[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\]/g, '')
+    // Remove hex color bracket markdown like [#000000] and raw hex colors
+    .replace(/\[#[0-9a-fA-F]{3,8}\]/gi, '')
+    .replace(/#[0-9a-fA-F]{3,8}\b/gi, '')
     // Remove unformatted raw URLs
     .replace(/https?:\/\/[^\s<>'"]+/gi, '')
     // Clean broken URL prefixes
@@ -602,7 +634,7 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
                   snippet: detail.snippet || fetchedMails[idx].snippet
                 };
                 const newOtp = extractOtpFromMail(fetchedMails[idx]);
-                if (newOtp) {
+                if (newOtp && isValidOtp(newOtp)) {
                   fetchedMails[idx].otpCode = newOtp;
                 }
               }
@@ -743,7 +775,7 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
                 snippet: detail.snippet || m.snippet
               };
               const newOtp = extractOtpFromMail(updated);
-              if (newOtp) {
+              if (newOtp && isValidOtp(newOtp)) {
                 updated.otpCode = newOtp;
               }
               return updated;
@@ -1039,7 +1071,8 @@ export default function OtpMailboxPage({ initialEmail = '', onSwitchTab, onShowT
           ) : (
             <div className="space-y-4">
               {mails.map((mail, index) => {
-                const otpCode = mail.otpCode || extractOtpFromMail(mail);
+                const candidateOtp = (mail.otpCode && isValidOtp(mail.otpCode)) ? mail.otpCode : extractOtpFromMail(mail);
+                const otpCode = isValidOtp(candidateOtp) ? candidateOtp : null;
                 const isCopied = copiedOtpId === mail.id;
                 const isExpanded = expandedMailId === mail.id;
                 const isLatest = index === 0;
